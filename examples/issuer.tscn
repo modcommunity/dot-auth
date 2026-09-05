@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://dotauth0issuer1"]
+
+[ext_resource type="Script" path="res://examples/issuer.gd" id="1_issuer"]
+
+[node name="IssuerHost" type="Node"]
+script = ExtResource("1_issuer")

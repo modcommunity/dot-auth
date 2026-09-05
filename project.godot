@@ -1,0 +1,26 @@
+; dot-auth — open-source authentication for Godot games and servers.
+;
+; The distributable is `addons/dot_auth/`. This project exists so the addon can
+; be opened and validated standalone.
+;
+; `addons/dot_core/` is a LOCAL SYMLINK to ../dot-core/addons/dot_core and is
+; gitignored — dot-core is a separate repository. See CLAUDE.md.
+
+config_version=5
+
+[application]
+
+config/name="dot-auth"
+config/description="Device-code authentication against a web backbone, signed connect tickets, and server-side identity for multiplayer games."
+config/version="0.1.0"
+run/main_scene="res://examples/auth_demo.tscn"
+config/features=PackedStringArray("4.4", "GL Compatibility")
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/dot_core/plugin.cfg", "res://addons/dot_auth/plugin.cfg")
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
