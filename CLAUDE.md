@@ -324,7 +324,7 @@ vulnerability rather than a crash.
 
 ```bash
 godot --headless --path . res://examples/issuer.tscn -- \
-    --auth-backbone-url https://themodcommunity.com
+    --auth-backbone-url https://moddingcommunity.com
 ```
 
 with `private_key_file` pointing at the key. The built-in listener speaks enough
@@ -402,6 +402,36 @@ dot-auth and dot-server do not import each other; either works alone.
   `source_name()`) by duck typing.
 
 Keep it that way. A hard dependency in either direction makes both harder to adopt.
+
+## The default backbone was a domain nobody owned
+
+`DotAuthConfig.backbone_url` shipped as `https://themodcommunity.com`. TMC's site is
+**`moddingcommunity.com`** — nothing in website-city has ever used any other name — and
+`themodcommunity.com` was, when this was found, **not registered to anybody**: no A
+record, no NS.
+
+So every deployment that did not override it aimed its device-code grant at a name any
+stranger could buy, and what goes there is the opening request of an authentication
+flow. It failed loudly only because the name did not resolve. The day somebody
+registered it, it would have started failing *quietly* instead — which is the worse of
+the two, and is the whole reason a default endpoint is a security property rather than a
+convenience.
+
+It had also travelled: the wrong name was in this README, this file, `examples/issuer.gd`
+and both of dot-user-avatar's, because they were all written from the default.
+
+Found by opening the browser client and reading the network tab — two failed requests to
+a domain that does not exist. Nothing in any suite here looks at what URL was dialled,
+and a headless run never dials one.
+
+**Overriding it.** It is an ordinary [DotConfig] field: `DOT_AUTH_BACKBONE_URL`,
+`--auth-backbone-url` and a JSON file, layered in that order by `DotAuthClient.start()`.
+A browser build has neither an environment nor an argv, so a web client has to be told
+through a JSON file shipped in its export — `dot-server-setup-test/client/auth.json` is
+the worked example, written per deployment by its `demo.sh`. It is deliberately **not**
+read from the page's query string: this URL decides where a single-use sign-in code is
+redeemed, and a link that could aim it at another host would be a credential-forwarding
+link.
 
 ## Things deliberately not here
 

@@ -16,13 +16,13 @@ Open-source authentication for Godot 4 games and dedicated servers. Signs player
 in against a web backbone, then proves who they are to a game server **without
 handing that server a credential for their account**.
 
-Part of the `dot-*` family alongside [dot-core](../dot-core),
-[dot-server](../dot-server) and [dot-cloud](../dot-cloud).
+Part of the `dot-*` family alongside [dot-core](https://github.com/modcommunity/dot-core),
+[dot-server](https://github.com/modcommunity/dot-server) and [dot-cloud](https://github.com/modcommunity/dot-cloud).
 
 ## Install
 
 Copy `addons/dot_core/` and `addons/dot_auth/` into your project and enable both
-in *Project → Project Settings → Plugins*. Requires Godot 4.4+.
+in *Project → Project Settings → Plugins*. Requires Godot 4.7+.
 
 ## Client
 
@@ -30,7 +30,7 @@ in *Project → Project Settings → Plugins*. Requires Godot 4.4+.
 var auth := DotAuthClient.new()
 add_child(auth)
 auth.config = DotAuthConfig.new()
-auth.config.backbone_url = "https://themodcommunity.com"
+auth.config.backbone_url = "https://moddingcommunity.com"
 auth.config.client_name = "My Game"
 
 auth.device_code_ready.connect(func(user_code, url, _expires):

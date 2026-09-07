@@ -8,7 +8,7 @@ extends Node
 ##
 ## [codeblock]
 ## godot --headless --path . res://examples/issuer.tscn -- \
-##     --auth-backbone-url https://themodcommunity.com
+##     --auth-backbone-url https://moddingcommunity.com
 ##
 ## # Exit on its own after a while, for a smoke test or a sweep:
 ## godot --headless --path . res://examples/issuer.tscn -- --seconds 5

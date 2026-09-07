@@ -32,7 +32,26 @@ enum Strategy {
 @export_group("Backbone")
 
 ## Base URL of the website-city backbone.
-@export var backbone_url: String = "https://themodcommunity.com"
+##
+## [b]The default is a real domain and that is a security property, not tidiness.[/b]
+## This was `https://themodcommunity.com` — which is not TMC's domain and, at the time
+## it was found, was **not registered to anybody**. Every deployment that did not
+## override it pointed its device-code grant at a name any stranger could buy, and the
+## thing sent there is the start of an authentication flow. It failed loudly only
+## because the name did not resolve; the day somebody registered it, it would have
+## started failing quietly instead, which is the worse of the two.
+##
+## The site is `moddingcommunity.com`. Nothing in website-city has ever used any other
+## name, so the wrong one came from here and travelled outward into three READMEs.
+##
+## Override it per deployment: it is an ordinary [DotConfig] field, so
+## `DOT_AUTH_BACKBONE_URL`, `--auth-backbone-url` and a JSON file all set it, layered in
+## that order. A browser build has neither an environment nor an argv, so a web client
+## is told through the JSON file its build ships with — see dot-server-setup-test's
+## `client/auth.json`. It is deliberately NOT read from the page's query string: this
+## URL decides where a single-use sign-in code is redeemed, and a link that could point
+## that at another host would be a credential-forwarding link.
+@export var backbone_url: String = "https://moddingcommunity.com"
 
 ## Client name shown on the backbone's device-approval screen.
 ##

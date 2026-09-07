@@ -234,7 +234,7 @@ func _device_seed() -> String:
 	var parts := PackedStringArray()
 	parts.append(OS.get_name())
 
-	var uid := OS.get_unique_id()
+	var uid := DotPlatform.unique_id()
 	if uid != "":
 		parts.append(uid)
 	else:

@@ -14,7 +14,7 @@ config/name="dot-auth"
 config/description="Device-code authentication against a web backbone, signed connect tickets, and server-side identity for multiplayer games."
 config/version="0.1.0"
 run/main_scene="res://examples/auth_demo.tscn"
-config/features=PackedStringArray("4.4", "GL Compatibility")
+config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [editor_plugins]
 

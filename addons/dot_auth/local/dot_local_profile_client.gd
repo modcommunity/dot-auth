@@ -199,7 +199,7 @@ func _save() -> DotResult:
 ## to unlock a save file is a prompt nobody wants, and the threat this addresses is
 ## a curious sibling rather than a determined attacker.
 static func _passphrase() -> String:
-	var machine := OS.get_unique_id()
+	var machine := DotPlatform.unique_id()
 
 	return DotHash.sha256_text(
 		"dot-auth:local-profiles:%s" % (machine if machine != "" else "web")

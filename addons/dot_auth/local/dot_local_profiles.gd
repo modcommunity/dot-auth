@@ -113,7 +113,7 @@ static func at(p_path: String) -> DotLocalProfiles:
 ## is a useful thing for an operator to see and a terrible thing to enforce: people
 ## replace computers, and a browser clears its storage on its own schedule.
 static func device_hint() -> String:
-	var id := OS.get_unique_id()
+	var id := DotPlatform.unique_id()
 
 	return DotHash.sha256_text(id).substr(0, 16) if id != "" else ""
 
