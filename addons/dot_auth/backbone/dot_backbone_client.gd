@@ -22,6 +22,20 @@ extends Node
 
 const CHANNEL := "backbone"
 
+## Registry name, so anything needing a backbone can find one without being handed it.
+##
+## [b]This was missing, and it is a shape this family has paid for before.[/b]
+## `DotCloudClient` went unregistered the same way and four call sites across dot-server
+## and dot-user-avatar all found null — none of them errored, because "no cloud client"
+## is a legitimate configuration and therefore indistinguishable from the bug.
+##
+## A backbone client is built by whatever owns the server's credential — dot-server-setup-
+## test's `TmcReport`, a game's own identity layer — and consumed by things that cannot
+## reach that: a chat relay, a stats reporter, a leaderboard. Handing it over means every
+## host growing per-consumer plumbing AND getting the ordering right, since a consumer
+## built during module load is built before a host could assign anything.
+const SERVICE := &"dot_backbone_client"
+
 ## Scopes the backbone requires. Documented here so a misconfigured integration
 ## produces a useful log line rather than an opaque 403.
 const SCOPE_STATS := "SERVER_STATS"
@@ -52,6 +66,9 @@ var stats_provider: Callable = Callable()
 
 ## Supplies the current roster. Same contract as [member stats_provider].
 var roster_provider: Callable = Callable()
+
+## Registry name to publish under, or empty not to publish.
+@export var register_as: StringName = SERVICE
 
 var _last_error: String = ""
 var _report_count: int = 0
@@ -96,6 +113,9 @@ func start() -> DotResult:
 
 	_started = true
 
+	if register_as != &"":
+		DotRegistry.register(register_as, self)
+
 	DotLog.info(
 		CHANNEL,
 		"backbone reporting ready",
@@ -110,6 +130,9 @@ func start() -> DotResult:
 
 
 func _exit_tree() -> void:
+	if register_as != &"" and DotRegistry.get_service(register_as) == self:
+		DotRegistry.unregister(register_as)
+
 	# A final "offline" so the listing does not show a dead server as full for
 	# however long the backbone's staleness window is.
 	if _started and _http != null:

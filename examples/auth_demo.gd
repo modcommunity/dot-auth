@@ -56,10 +56,51 @@ func _run() -> void:
 	await _test_providers()
 	await _test_local_profiles()
 	await _test_single_session(keys)
+	await _test_backbone_registry()
 
 	_line("")
 	_line("[b]%d passed, %d failed[/b]" % [_passed, _failed])
 	_finish()
+
+
+# --- The registry ----------------------------------------------------------
+
+## A backbone client publishes itself, so a consumer can find one it was not handed.
+##
+## [b]This is the shape that cost `DotCloudClient` four call sites.[/b] It went
+## unregistered and every consumer found null — and none of them errored, because "no
+## client" is a legitimate configuration and therefore indistinguishable from the bug.
+## A chat relay or a stats reporter built during module load exists BEFORE any host
+## could assign one, so being findable is the only way it is reachable at all.
+func _test_backbone_registry() -> void:
+	_line("")
+	_line("[b]the registry[/b]")
+
+	var config := DotAuthConfig.new()
+	config.integration_token = "tmci_selftest_not_a_real_token"
+	config.report_interval_sec = 0.0
+
+	var client := DotBackboneClient.new()
+	client.config = config
+	client.auto_report = false
+	add_child(client)
+
+	var started := client.start()
+	_check("the client starts", started.ok, started)
+	_check(
+		"and publishes itself under dot_backbone_client",
+		DotRegistry.get_service(&"dot_backbone_client") == client,
+		DotResult.success(null)
+	)
+
+	# And takes it back down with it, or the next one to look finds a freed object.
+	client.queue_free()
+	await get_tree().process_frame
+	_check(
+		"and takes the registration with it",
+		DotRegistry.get_service(&"dot_backbone_client") == null,
+		DotResult.success(null)
+	)
 
 
 # --- Tickets ---------------------------------------------------------------
