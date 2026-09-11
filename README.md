@@ -38,7 +38,7 @@ if res.ok:
     print("hello ", (res.value as DotAuthIdentity).display_name)
 ```
 
-A device-code flow, not a password field — so the password is only ever typed on the website, and the same code works on desktop, mobile, console and in a browser. Returning players never see a code: `sign_in()` restores from a stored rotating refresh token.
+A device-code flow, not a password field, so the password is only ever typed on the website, and the same code works on desktop, mobile, console and in a browser. Returning players never see a code: `sign_in()` restores from a stored rotating refresh token.
 
 ## Server
 
@@ -56,7 +56,7 @@ if not res.ok:
 var identity: DotAuthIdentity = res.value
 ```
 
-Verification is offline — no backbone round trip per join.
+Verification is offline, with no backbone round trip per join.
 
 ## Why tickets
 
@@ -76,15 +76,15 @@ The ticket is audience-scoped, short-lived, single-use and RSA-signed. A server 
 | | |
 | --- | --- |
 | `TICKET` | Public servers. The above. |
-| `INTROSPECT` | First-party servers only — the operator holds a live account credential. Warns at startup. |
+| `INTROSPECT` | First-party servers only, where the operator holds a live account credential. Warns at startup. |
 | `LOCAL` | LAN and development. Accounts in a JSON file. |
 | `ANONYMOUS` | Everyone is a guest. Bans cannot mean anything. Warns. |
 
-Plus **local profiles**, which are a provider rather than a strategy and so work alongside any of them — see below.
+Plus **local profiles**, which are a provider rather than a strategy and so work alongside any of them. See below.
 
 ## Accounts with no cloud
 
-Not every game wants an identity service, and not every player has an account. `allow_local_profiles` lets a visitor make one that lives on **that server and nowhere else** — with a profile and an avatar, persisting between visits.
+Not every game wants an identity service, and not every player has an account. `allow_local_profiles` lets a visitor make one that lives on **that server and nowhere else**, with a profile and an avatar, persisting between visits.
 
 ```gdscript
 config.allow_local_profiles = true          # server
@@ -106,14 +106,14 @@ keeper.remember(server_id, id, secret, name)
 
 It is a **provider**, not a strategy, so it composes: a server can accept backbone tickets and local profiles at once.
 
-**The server issues the credential — the client does not claim an identity.** That is the difference between this and offline-mode accounts elsewhere, where the name *is* the identity and anyone who types yours is you. A machine id is deliberately not used: `OS.get_unique_id()` is empty on web and iOS, it is client-supplied and so exactly as forgeable as a name, and it is shared by everyone using that computer. It is recorded as a hint and only ever logged.
+**The server issues the credential. The client does not claim an identity.** That is the difference between this and offline-mode accounts elsewhere, where the name *is* the identity and anyone who types yours is you. A machine id is deliberately not used: `OS.get_unique_id()` is empty on web and iOS, it is client-supplied and so exactly as forgeable as a name, and it is shared by everyone using that computer. It is recorded as a hint and only ever logged.
 
 The id is a 22-character player key of the same shape everything else here uses, so dot-user and dot-user-avatar file a local player's profile and avatar through their ordinary local backends. **A complete platform, with no backbone.**
 
 ## Also included
 
-- **`DotBackboneClient`** — a dedicated server reporting its own player count, map and roster to its site listing, with the replay protection the integration API requires.
-- **`DotAuthAdminSource`** — maps site groups, roles and claims to dot-server permission flags and immunity levels, so "everyone in the site group `moderators` can kick here" is one rule instead of a hand-edited user list. Guests never receive permissions; site roles grant nothing unless you map them.
+- **`DotBackboneClient`** reports a dedicated server's own player count, map and roster to its site listing, with the replay protection the integration API requires.
+- **`DotAuthAdminSource`** maps site groups, roles and claims to dot-server permission flags and immunity levels, so "everyone in the site group `moderators` can kick here" is one rule instead of a hand-edited user list. Guests never receive permissions; site roles grant nothing unless you map them.
 
 ## Try it
 
@@ -127,8 +127,8 @@ Run an issuer with `res://examples/issuer.tscn`.
 
 ## Honest limits
 
-`DotAuthServer.hash_password` is salted SHA-256, not argon2 — Godot ships no password KDF. It exists so a LAN server does not store plaintext; real accounts belong on the backbone. And on web the token store's encryption is obfuscation, because the key and the ciphertext share one origin. Both are documented where they matter in [CLAUDE.md](CLAUDE.md#two-things-that-are-weaker-than-they-look).
+`DotAuthServer.hash_password` is salted SHA-256, not argon2, because Godot ships no password KDF. It exists so a LAN server does not store plaintext; real accounts belong on the backbone. And on web the token store's encryption is obfuscation, because the key and the ciphertext share one origin. Both are documented where they matter in [CLAUDE.md](CLAUDE.md#two-things-that-are-weaker-than-they-look).
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
