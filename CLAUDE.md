@@ -427,7 +427,7 @@ and a headless run never dials one.
 **Overriding it.** It is an ordinary [DotConfig] field: `DOT_AUTH_BACKBONE_URL`,
 `--auth-backbone-url` and a JSON file, layered in that order by `DotAuthClient.start()`.
 A browser build has neither an environment nor an argv, so a web client has to be told
-through a JSON file shipped in its export — `dot-server-setup-test/client/auth.json` is
+through a JSON file shipped in its export — `dot-server-deploy/client/auth.json` is
 the worked example, written per deployment by its `demo.sh`. It is deliberately **not**
 read from the page's query string: this URL decides where a single-use sign-in code is
 redeemed, and a link that could aim it at another host would be a credential-forwarding

@@ -47,7 +47,7 @@ enum Strategy {
 ## Override it per deployment: it is an ordinary [DotConfig] field, so
 ## `DOT_AUTH_BACKBONE_URL`, `--auth-backbone-url` and a JSON file all set it, layered in
 ## that order. A browser build has neither an environment nor an argv, so a web client
-## is told through the JSON file its build ships with — see dot-server-setup-test's
+## is told through the JSON file its build ships with — see dot-server-deploy's
 ## `client/auth.json`. It is deliberately NOT read from the page's query string: this
 ## URL decides where a single-use sign-in code is redeemed, and a link that could point
 ## that at another host would be a credential-forwarding link.
