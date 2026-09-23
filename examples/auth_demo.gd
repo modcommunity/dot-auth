@@ -57,6 +57,7 @@ func _run() -> void:
 	await _test_local_profiles()
 	await _test_single_session(keys)
 	await _test_backbone_registry()
+	_test_app_refusal()
 
 	_line("")
 	_line("[b]%d passed, %d failed[/b]" % [_passed, _failed])
@@ -101,6 +102,32 @@ func _test_backbone_registry() -> void:
 		DotRegistry.get_service(&"dot_backbone_client") == null,
 		DotResult.success(null)
 	)
+
+
+# --- The app API's refusals ---------------------------------------------------
+
+## website-city refuses flat: `{ok: false, code, message, retryAfter?}`. This used to read
+## only a nested `error` object the site never sends, so every refusal through
+## post_app/get_app came back as the fallback text with the site's code thrown away.
+func _test_app_refusal() -> void:
+	_line("")
+	_line("[b]app API refusals[/b]")
+
+	var client := DotAuthClient.new()
+	var body := "{\"ok\":false,\"code\":\"party.join.deny.full\",\"message\":\"This party is full.\"}"
+	var got := client._app_refusal(DotResult.failure(DotError.from_http(409, body)), "fallback")
+	_check("the site's code survives", not got.ok and got.error.detail == "party.join.deny.full", got)
+	_check("and its message", got.error.message == "This party is full.", got)
+	_check("and the HTTP status", got.error.http_status == 409, got)
+
+	var slow := "{\"ok\":false,\"code\":\"rate_limited\",\"message\":\"Slow down.\",\"retryAfter\":12}"
+	var limited := client._app_refusal(DotResult.failure(DotError.from_http(429, slow)), "fallback")
+	_check("a retry-after is kept", limited.error.retry_after == 12.0, limited)
+
+	var nested := "{\"ok\":false,\"error\":{\"code\":\"x\",\"message\":\"Nested.\"}}"
+	var old := client._app_refusal(DotResult.failure(DotError.from_http(400, nested)), "fallback")
+	_check("the nested shape still reads", old.error.detail == "x" and old.error.message == "Nested.", old)
+	client.free()
 
 
 # --- Tickets ---------------------------------------------------------------

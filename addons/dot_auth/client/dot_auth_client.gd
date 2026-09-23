@@ -874,12 +874,29 @@ func _unwrap_any(response: Variant) -> DotResult:
 	return DotResult.success(d)
 
 
-## The app API's own error, when it sent one: `{ok: false, error: {code, message}}`.
+## The app API's own error, when it sent one: `{ok: false, code, message, retryAfter?}`.
+##
+## [b]Flat, as website-city's [code]ApiErrorSchema[/code] and [code]apiError()[/code]
+## send it.[/b] This read only a nested [code]{error: {code, message}}[/code], which the
+## site never sends, so every refusal through [method post_app] and [method get_app]
+## lost the site's code and its message and came back as the fallback text — found by
+## dot-party, whose refusals are the site's i18n keys and are useless without them. The
+## nested shape is still accepted, in case anything in front of the site produces it.
 func _app_refusal(res: DotResult, fallback: String) -> DotResult:
 	if res.ok or res.error == null:
 		return res
 
-	var parsed: Variant = JSON.parse_string(res.error.detail)
+	var parsed: Variant = JSON.parse_string(res.error.detail) if res.error.detail != "" else null
+	if parsed is Dictionary and (parsed as Dictionary).get("code") is String:
+		var flat: Dictionary = parsed
+		var err_flat := DotError.make(
+			res.error.code, str(flat.get("message", fallback)), str(flat["code"])
+		)
+		err_flat.http_status = res.error.http_status
+		err_flat.retry_after = float(flat["retryAfter"]) if flat.get("retryAfter") != null \
+			else res.error.retry_after
+		return DotResult.failure(err_flat)
+
 	if parsed is Dictionary and (parsed as Dictionary).get("error") is Dictionary:
 		var body: Dictionary = (parsed as Dictionary)["error"]
 		var err := DotError.make(
