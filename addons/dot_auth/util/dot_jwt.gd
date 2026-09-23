@@ -20,7 +20,9 @@ extends RefCounted
 ## servers — any one of them could then mint tickets for any player. Use RS256 for
 ## anything crossing a trust boundary; [DotAuthConfig] warns when you do not.
 
-const CHANNEL := "auth.jwt"
+# No log channel: a codec. Every refusal is a DotResult, and a verifier that logged a bad
+# token would write a line per forged request with nobody to name. DotAuthServer, which
+# holds the request, counts the refusal and emits it as `rejected`.
 
 const ALG_RS256 := "RS256"
 const ALG_HS256 := "HS256"

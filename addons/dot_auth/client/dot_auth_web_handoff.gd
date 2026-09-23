@@ -37,7 +37,9 @@ extends RefCounted
 ## platform guard — see [DotAuthClient.try_web_handoff], which is what a game
 ## actually calls.
 
-const CHANNEL := "auth"
+# No log channel: static reads of one page global. Whether a missing or pending block
+# matters is the auth client's decision, and it is the one that logs how a player
+# signed in. Nothing here can fail against anything but a page that did not publish.
 
 ## The global the embedding page parks the block on.
 const GLOBAL := "__TMC_AUTH__"
