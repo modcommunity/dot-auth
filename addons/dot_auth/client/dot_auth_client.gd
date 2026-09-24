@@ -800,7 +800,7 @@ func _issuer_refusal(res: DotResult, fallback: String) -> DotResult:
 	if res.ok or res.error == null:
 		return res
 
-	var parsed: Variant = JSON.parse_string(res.error.detail)
+	var parsed: Variant = _envelope_of(res.error.detail)
 	if parsed is Dictionary and (parsed as Dictionary).has("error"):
 		var body := parsed as Dictionary
 		var err := DotError.make(
@@ -886,7 +886,7 @@ func _app_refusal(res: DotResult, fallback: String) -> DotResult:
 	if res.ok or res.error == null:
 		return res
 
-	var parsed: Variant = JSON.parse_string(res.error.detail) if res.error.detail != "" else null
+	var parsed: Variant = _envelope_of(res.error.detail)
 	if parsed is Dictionary and (parsed as Dictionary).get("code") is String:
 		var flat: Dictionary = parsed
 		var err_flat := DotError.make(
@@ -948,7 +948,7 @@ func _envelope_code(res: DotResult) -> String:
 	if res.error == null or res.error.detail == "":
 		return ""
 
-	var parsed: Variant = JSON.parse_string(res.error.detail)
+	var parsed: Variant = _envelope_of(res.error.detail)
 	if not (parsed is Dictionary):
 		return ""
 
@@ -963,3 +963,17 @@ func describe() -> Dictionary:
 		"store": store.describe() if store != null else {},
 		"signing_in": _signing_in,
 	}
+
+## A refusal's body as a Dictionary, or null — without the engine's own ERROR line.
+##
+## The detail is only ever an envelope when it is a JSON object. A transport failure
+## ("engine error 3") and a proxy's HTML error page are text, and [code]JSON.parse_string[/code]
+## prints an unsuppressible ERROR for each before answering null — found by driving the
+## backend at a live site whose request failed before it was sent.
+static func _envelope_of(detail: String) -> Variant:
+	if not detail.strip_edges().begins_with("{"):
+		return null
+	var json := JSON.new()
+	if json.parse(detail) != OK:
+		return null
+	return json.data
