@@ -30,12 +30,12 @@ const SERVER_B := "us-east-2"
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 10
+const SECTIONS := 11
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 135
+const CHECKS := 143
 
 var _entered := 0
 var _completed := 0
@@ -63,6 +63,7 @@ func _run() -> void:
 	await _test_tickets(keys)
 	_test_pkce()
 	_test_local_accounts()
+	await _test_refusals_are_logged()
 	_test_admin_source()
 	_test_token_store()
 	await _test_providers()
@@ -434,6 +435,122 @@ func _test_local_accounts() -> void:
 
 	server.queue_free()
 	DirAccess.remove_absolute(path)
+	_line("")
+	_done()
+
+
+# --- Refusals are logged ----------------------------------------------------
+
+## The server used to count a refusal and emit a signal and say nothing, so "why can I not
+## get in" had no answer in the server's own log. Each refusal is now logged at the level
+## of whoever has to act: the player's at INFO, the limiter's at DEBUG, a verifier that is
+## down at WARN once, and a long run of refusals with nobody getting in at WARN once.
+func _test_refusals_are_logged() -> void:
+	_section("[b]refusals are logged[/b]")
+
+	var records: Array[Dictionary] = []
+	var capture := func(rec: Dictionary) -> void:
+		if str(rec.get("channel", "")) == DotAuthServer.CHANNEL:
+			records.append(rec)
+	var printing := DotLog.print_to_stdout
+	DotLog.print_to_stdout = false
+	DotLog.set_channel_level(DotAuthServer.CHANNEL, DotLog.Level.DEBUG)
+	DotLog.signals().record.connect(capture)
+
+	var path := "user://dot_auth_test_refusals.json"
+	DirAccess.remove_absolute(path)
+	var config := DotAuthConfig.new()
+	config.strategy = DotAuthConfig.Strategy.LOCAL
+	config.local_accounts_path = path
+	config.allow_guests = false
+	config.auth_attempts_per_minute = 3
+	var server := DotAuthServer.new()
+	server.config = config
+	server.config_file = ""
+	server.register_service = false
+	add_child(server)
+	server.start()
+	server.upsert_local_account("grace", "correct-horse-battery", "Grace", "")
+
+	records.clear()
+	await server.authenticate({"username": "Grace", "password": "hunter2-secret"}, "10.0.0.1")
+	var refusal: Dictionary = records[0] if records.size() == 1 else {}
+	var fields: Dictionary = refusal.get("fields", {})
+	_check(
+		"a wrong password is INFO",
+		int(refusal.get("level", -1)) == DotLog.Level.INFO
+			and str(fields.get("code", "")) == DotError.CODE_AUTH,
+		null
+	)
+	_check(
+		"naming who and from where",
+		str(fields.get("username", "")) == "grace" and str(fields.get("from", "")) == "10.0.0.1",
+		null
+	)
+	_check(
+		"and never the password",
+		not var_to_str(refusal).contains("hunter2-secret"),
+		null
+	)
+
+	# Three per minute per key: the fourth from one address is the limiter.
+	for i in range(3):
+		await server.authenticate({"username": "grace", "password": "no"}, "10.0.0.2")
+	records.clear()
+	await server.authenticate({"username": "grace", "password": "no"}, "10.0.0.2")
+	_check(
+		"the limiter's refusal is DEBUG",
+		records.size() == 1 and int(records[0].get("level", -1)) == DotLog.Level.DEBUG
+			and str((records[0].get("fields", {}) as Dictionary).get("code", ""))
+				== DotError.CODE_RATE_LIMITED,
+		null
+	)
+
+	# A run with nobody getting in is escalated once, and a real sign-in ends the run.
+	var warns := func() -> int:
+		return records.filter(func(r: Dictionary) -> bool:
+			return int(r.get("level", -1)) == DotLog.Level.WARN).size()
+	await server.authenticate({"username": "grace", "password": "correct-horse-battery"}, "10.0.1.0")
+	records.clear()
+	for i in range(DotAuthServer.REFUSAL_RUN_WARN - 1):
+		await server.authenticate({"username": "grace", "password": "no"}, "10.0.1.%d" % (i + 1))
+	_check("a few refusals are not a WARN", warns.call() == 0, null)
+	await server.authenticate({"username": "grace", "password": "no"}, "10.0.2.0")
+	_check("a run of them with nobody in is", warns.call() == 1, null)
+	for i in range(5):
+		await server.authenticate({"username": "grace", "password": "no"}, "10.0.3.%d" % i)
+	_check("once, not on every refusal after", warns.call() == 1, null)
+
+	server.queue_free()
+	DirAccess.remove_absolute(path)
+
+	# A verifier that cannot be reached: WARN once, however many joins it refuses.
+	var down := DotAuthConfig.new()
+	down.strategy = DotAuthConfig.Strategy.INTROSPECT
+	down.backbone_url = "http://127.0.0.1:9"
+	down.allow_guests = false
+	var remote := DotAuthServer.new()
+	remote.config = down
+	remote.config_file = ""
+	remote.register_service = false
+	add_child(remote)
+	remote.start()
+	records.clear()
+	var first: DotResult = await remote.authenticate({"access_token": "t1"}, "10.0.4.1")
+	await remote.authenticate({"access_token": "t2"}, "10.0.4.2")
+	var outage := records.filter(func(r: Dictionary) -> bool:
+		return str(r.get("message", "")) == "sign-ins cannot be verified right now")
+	_check(
+		"an unreachable verifier is one WARN",
+		not first.ok and outage.size() == 1
+			and int(outage[0].get("level", -1)) == DotLog.Level.WARN,
+		first
+	)
+	remote.queue_free()
+
+	DotLog.signals().record.disconnect(capture)
+	DotLog.clear_channel_level(DotAuthServer.CHANNEL)
+	DotLog.print_to_stdout = printing
 	_line("")
 	_done()
 

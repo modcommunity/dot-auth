@@ -58,6 +58,23 @@ var _last_sweep: int = 0
 var _started: bool = false
 var _stats := {"ok": 0, "rejected": 0, "guests": 0}
 
+## Refusals in a row, with no real sign-in between, before the pattern is logged at WARN.
+##
+## One refused ticket is a player's problem -- an expired one, a copy from the wrong
+## server -- and is INFO. Ten in a row with nobody getting in is almost always this
+## server's: a `ticket_public_key` from another deployment, a `server_id` that does not
+## match what the backbone issues for, a clock that has drifted. Nothing else in the
+## process can tell those apart, and every one of them reads, from the player's side, as
+## "the server will not let me in".
+const REFUSAL_RUN_WARN := 10
+
+var _refused_run: int = 0
+var _warned_run: bool = false
+# Edge state: a verifier that cannot be reached (the backbone behind INTROSPECT, or a
+# provider's service) is said once when it starts failing and once when it recovers,
+# rather than at WARN on every join while it is down.
+var _verifier_down: bool = false
+
 ## Custom authentication providers, consulted before the built-in strategy.
 ##
 ## See [DotAuthProvider]. Kept sorted by priority.
@@ -235,6 +252,7 @@ func authenticate(
 		)
 		err.retry_after = _limiter.retry_after(key)
 		_stats["rejected"] += 1
+		_log_refusal(err, key, credential)
 		rejected.emit(err.message, "rate limited")
 		return DotResult.failure(err)
 
@@ -290,6 +308,17 @@ func _finish(
 	key: Variant,
 	credential: Dictionary
 ) -> DotResult:
+	# Before the guest fallback, because a verifier that is down is the operator's
+	# problem whether or not the player was then let in as a guest.
+	if not res.ok and res.error != null and res.error.is_retryable() and not _verifier_down:
+		_verifier_down = true
+		DotLog.warn(CHANNEL, "sign-ins cannot be verified right now", {
+			"strategy": strategy_name(),
+			"code": res.code(),
+			"error": res.error.message,
+			"detail": res.error.detail,
+		})
+
 	if not res.ok and config.allow_guests and config.strategy != DotAuthConfig.Strategy.ANONYMOUS:
 		DotLog.info(
 			CHANNEL,
@@ -308,14 +337,83 @@ func _finish(
 			# throttle guessing, not to throttle a player who has just proved who
 			# they are and may need to reconnect.
 			_limiter.reset(key)
+			_refused_run = 0
+			_warned_run = false
+			if _verifier_down:
+				_verifier_down = false
+				DotLog.info(CHANNEL, "sign-ins are being verified again", {
+					"strategy": strategy_name()
+				})
 		authenticated.emit(identity)
 	else:
 		_stats["rejected"] += 1
+		_log_refusal(res.error, key, credential)
 		rejected.emit(
 			res.error.message, res.error.detail if res.error != null else ""
 		)
 
 	return res
+
+
+## Says why a sign-in was refused, at the level of whoever has to act on it.
+##
+## [b]The level is chosen by who is expected to act[/b], which is the family's rule and the
+## reason this is not one line at one level:
+##
+## - A refused credential -- wrong password, expired or forged ticket, a ticket for another
+##   server -- is the player's, and INFO: an admin wants failed sign-ins kept (they are what
+##   a guessing attack looks like) but nobody has to do anything about one. A long run of
+##   them with no success between is escalated once to WARN; see [constant REFUSAL_RUN_WARN].
+## - Rate limiting is the limiter doing its job, at DEBUG. The attempts that tripped it were
+##   each logged at INFO already.
+## - A verifier that cannot be reached is WARN, once per outage, in [method _finish]; each
+##   refusal it causes is DEBUG here.
+## - Anything that is this server's own fault -- an unknown strategy, a provider that failed
+##   internally, a file it could not read -- is ERROR.
+##
+## Never the credential itself: no password, no token, no ticket. The username is logged
+## because it is what a guessing attack is aimed at, and an operator needs it to see one.
+func _log_refusal(err: DotError, key: Variant, credential: Dictionary) -> void:
+	var code := err.code if err != null else DotError.CODE_INTERNAL
+	var fields := {
+		"code": code,
+		"reason": err.message if err != null else "",
+		"from": str(key),
+		"strategy": strategy_name(),
+	}
+	if err != null and err.detail != "":
+		fields["detail"] = err.detail
+	var username := str(credential.get("username", ""))
+	if username != "":
+		fields["username"] = username.to_lower().substr(0, 64)
+
+	if code == DotError.CODE_RATE_LIMITED:
+		DotLog.debug(CHANNEL, "sign-in refused: too many attempts", fields)
+		return
+
+	if err != null and err.is_retryable():
+		DotLog.debug(CHANNEL, "sign-in refused: could not be verified", fields)
+		return
+
+	if code in [
+		DotError.CODE_INTERNAL, DotError.CODE_STATE, DotError.CODE_IO,
+		DotError.CODE_UNSUPPORTED,
+	]:
+		DotLog.error(CHANNEL, "sign-in failed on this server's side", fields)
+		return
+
+	DotLog.info(CHANNEL, "sign-in refused", fields)
+
+	_refused_run += 1
+	if _refused_run >= REFUSAL_RUN_WARN and not _warned_run:
+		_warned_run = true
+		DotLog.warn(CHANNEL, "every recent sign-in has been refused", {
+			"in_a_row": _refused_run,
+			"last_code": code,
+			"last_detail": fields.get("detail", ""),
+			"strategy": strategy_name(),
+			"hint": "if these are real players: ticket_public_key, server_id and the clock",
+		})
 
 
 ## Verifies a signed connect ticket. Offline: no network call per join.
