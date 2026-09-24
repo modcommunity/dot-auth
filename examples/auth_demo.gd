@@ -27,6 +27,18 @@ const SERVER_B := "us-east-2"
 
 @onready var _output: RichTextLabel = $Output
 
+## Sections entered against sections that ran to their last line, and against this. A
+## runtime error inside a section aborts that function and nothing says so; a section that
+## bailed out early after a failed guard is counted as not finished on purpose.
+const SECTIONS := 10
+
+## Every check this suite runs, including the two at the end that compare the counts. The
+## section counter cannot see a section that aborted after announcing itself — its remaining
+## checks simply never run — and a total can. See docs/testing.md.
+const CHECKS := 135
+
+var _entered := 0
+var _completed := 0
 var _passed := 0
 var _failed := 0
 
@@ -60,6 +72,17 @@ func _run() -> void:
 	_test_app_refusal()
 
 	_line("")
+	# The two guards, as the last two checks. See docs/testing.md.
+	_check(
+		"every section ran to its last line (%d of %d)" % [_completed, SECTIONS],
+		_completed == _entered and _entered == SECTIONS,
+		null
+	)
+	_check(
+		"every check ran (%d of %d)" % [_passed + _failed + 1, CHECKS],
+		_passed + _failed + 1 == CHECKS,
+		null
+	)
 	_line("[b]%d passed, %d failed[/b]" % [_passed, _failed])
 	_finish()
 
@@ -75,7 +98,7 @@ func _run() -> void:
 ## could assign one, so being findable is the only way it is reachable at all.
 func _test_backbone_registry() -> void:
 	_line("")
-	_line("[b]the registry[/b]")
+	_section("[b]the registry[/b]")
 
 	var config := DotAuthConfig.new()
 	config.integration_token = "tmci_selftest_not_a_real_token"
@@ -102,6 +125,7 @@ func _test_backbone_registry() -> void:
 		DotRegistry.get_service(&"dot_backbone_client") == null,
 		DotResult.success(null)
 	)
+	_done()
 
 
 # --- The app API's refusals ---------------------------------------------------
@@ -111,7 +135,7 @@ func _test_backbone_registry() -> void:
 ## post_app/get_app came back as the fallback text with the site's code thrown away.
 func _test_app_refusal() -> void:
 	_line("")
-	_line("[b]app API refusals[/b]")
+	_section("[b]app API refusals[/b]")
 
 	var client := DotAuthClient.new()
 	var body := "{\"ok\":false,\"code\":\"party.join.deny.full\",\"message\":\"This party is full.\"}"
@@ -128,12 +152,13 @@ func _test_app_refusal() -> void:
 	var old := client._app_refusal(DotResult.failure(DotError.from_http(400, nested)), "fallback")
 	_check("the nested shape still reads", old.error.detail == "x" and old.error.message == "Nested.", old)
 	client.free()
+	_done()
 
 
 # --- Tickets ---------------------------------------------------------------
 
 func _test_tickets(keys: Dictionary) -> void:
-	_line("[b]connect tickets[/b]")
+	_section("[b]connect tickets[/b]")
 
 	var identity := DotAuthIdentity.new()
 	identity.uid = "backbone:clx8f2k0000"
@@ -303,12 +328,13 @@ func _test_tickets(keys: Dictionary) -> void:
 
 	server.queue_free()
 	_line("")
+	_done()
 
 
 # --- PKCE ------------------------------------------------------------------
 
 func _test_pkce() -> void:
-	_line("[b]PKCE[/b]")
+	_section("[b]PKCE[/b]")
 
 	var pair := DotPkce.generate()
 	var verifier := str(pair["verifier"])
@@ -339,12 +365,13 @@ func _test_pkce() -> void:
 	)
 
 	_line("")
+	_done()
 
 
 # --- Local accounts --------------------------------------------------------
 
 func _test_local_accounts() -> void:
-	_line("[b]local accounts[/b]")
+	_section("[b]local accounts[/b]")
 
 	var path := "user://dot_auth_test_accounts.json"
 	DirAccess.remove_absolute(path)
@@ -408,12 +435,13 @@ func _test_local_accounts() -> void:
 	server.queue_free()
 	DirAccess.remove_absolute(path)
 	_line("")
+	_done()
 
 
 # --- Admin source ----------------------------------------------------------
 
 func _test_admin_source() -> void:
-	_line("[b]admin mapping[/b]")
+	_section("[b]admin mapping[/b]")
 
 	var source := DotAuthAdminSource.new()
 	source.group_flags = {
@@ -479,12 +507,13 @@ func _test_admin_source() -> void:
 	)
 
 	_line("")
+	_done()
 
 
 # --- Token store -----------------------------------------------------------
 
 func _test_token_store() -> void:
-	_line("[b]token store[/b]")
+	_section("[b]token store[/b]")
 
 	var path := "user://dot_auth_test_tokens.dat"
 	DirAccess.remove_absolute(path)
@@ -534,6 +563,7 @@ func _test_token_store() -> void:
 	_check("cleared", not FileAccess.file_exists(path), null)
 
 	_line("")
+	_done()
 
 
 ## A custom authentication provider, defined entirely outside dot-auth.
@@ -559,7 +589,7 @@ class DemoProvider extends DotAuthProvider:
 
 
 func _test_providers() -> void:
-	_line("[b]custom auth providers[/b]")
+	_section("[b]custom auth providers[/b]")
 
 	var config := DotAuthConfig.new()
 	config.strategy = DotAuthConfig.Strategy.LOCAL
@@ -604,6 +634,7 @@ func _test_providers() -> void:
 	server.queue_free()
 	DirAccess.remove_absolute(config.local_accounts_path)
 	_line("")
+	_done()
 
 
 # --- Helpers ---------------------------------------------------------------
@@ -643,6 +674,16 @@ func _find_bytes(haystack: PackedByteArray, needle: PackedByteArray) -> int:
 	return -1
 
 
+func _section(title: String) -> void:
+	_entered += 1
+	_line(title)
+
+
+## A section reached its last line. See [constant SECTIONS].
+func _done() -> void:
+	_completed += 1
+
+
 func _check(what: String, passed: bool, res: DotResult) -> void:
 	if passed:
 		_passed += 1
@@ -678,7 +719,7 @@ func _line(text: String) -> void:
 ## design where the client asserts its own identity, which is the design this
 ## replaces.
 func _test_local_profiles() -> void:
-	_line("[b]local profiles[/b]")
+	_section("[b]local profiles[/b]")
 
 	var path := "user://dot_auth_test_profiles.json"
 	DirAccess.remove_absolute(path)
@@ -911,6 +952,7 @@ func _test_local_profiles() -> void:
 	DirAccess.remove_absolute(path)
 	DirAccess.remove_absolute(keeper_path)
 	DirAccess.remove_absolute(config.local_profiles_path)
+	_done()
 
 
 ## The shape check dot-user-avatar applies to a key, restated for the assertion.
@@ -949,7 +991,7 @@ class DotAvatarKeyShape:
 ## endpoint is the one part of this a unit call cannot reach — and the family's
 ## record says the bug is always in the part nothing ran.
 func _test_single_session(keys: Dictionary) -> void:
-	_line("[b]single session[/b]")
+	_section("[b]single session[/b]")
 
 	const PORT := 18787
 	const KEY_A := "server-a-key-0123456789abcdef"
@@ -1130,6 +1172,9 @@ func _test_single_session(keys: Dictionary) -> void:
 		_line("  (port %d is in use; the socket half was not run)" % PORT)
 		issuer.queue_free()
 		_line("")
+		# A deliberate end rather than an abort; the total of checks is what says the socket
+		# half's checks did not run.
+		_done()
 		return
 
 	var http := DotHttp.new()
@@ -1254,3 +1299,4 @@ func _test_single_session(keys: Dictionary) -> void:
 	http.queue_free()
 	issuer.queue_free()
 	_line("")
+	_done()
