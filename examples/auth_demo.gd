@@ -30,12 +30,12 @@ const SERVER_B := "us-east-2"
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 11
+const SECTIONS := 12
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 143
+const CHECKS := 150
 
 var _entered := 0
 var _completed := 0
@@ -71,6 +71,7 @@ func _run() -> void:
 	await _test_single_session(keys)
 	await _test_backbone_registry()
 	_test_app_refusal()
+	await _test_scoped_introspect()
 
 	_line("")
 	# The two guards, as the last two checks. See docs/testing.md.
@@ -153,6 +154,65 @@ func _test_app_refusal() -> void:
 	var old := client._app_refusal(DotResult.failure(DotError.from_http(400, nested)), "fallback")
 	_check("the nested shape still reads", old.error.detail == "x" and old.error.message == "Nested.", old)
 	client.free()
+	_done()
+
+
+## A backbone client that answers `player/introspect` from a table, the way the site's
+## route does, and records what it was asked.
+class FakeBackbone extends DotBackboneClient:
+	var asked: Array = []
+
+	func post_integration(path: String, body: Dictionary) -> DotResult:
+		asked.append([path, body.duplicate()])
+		var token := str(body.get("access_token", ""))
+		if token == "live":
+			return DotResult.success({"user": {
+				"key": "Kq3_scopedKey-forThis1", "name": "Ada", "username": "ada"}})
+		if token == "other-app":
+			return DotResult.failure(DotError.from_http(403, "{\"code\":\"wrong_app\"}"))
+		return DotResult.failure(DotError.from_http(401, "{\"code\":\"token_expired\"}"))
+
+
+func _test_scoped_introspect() -> void:
+	_line("")
+	_section("[b]scoped introspection[/b]")
+
+	var config := DotAuthConfig.new()
+	config.strategy = DotAuthConfig.Strategy.INTROSPECT
+	config.backbone_url = "http://127.0.0.1:9"
+	config.allow_guests = false
+	var server := DotAuthServer.new()
+	server.config = config
+	server.config_file = ""
+	server.register_service = false
+	var fake := FakeBackbone.new()
+	server.backbone = fake
+	add_child(server)
+	server.start()
+
+	var got: DotResult = await server.authenticate({"access_token": "live"}, "10.0.5.1")
+	var who: DotAuthIdentity = got.value if got.ok else null
+	_check("a live token is asked about AS this server",
+		fake.asked.size() == 1 and fake.asked[0][0] == "player/introspect"
+			and fake.asked[0][1].get("access_token") == "live", got)
+	_check("the identity is keyed by the site's scoped key, not an account id",
+		who != null and who.uid == "site:Kq3_scopedKey-forThis1", got)
+	_check("and carries that key for dot-user to file the profile under",
+		who != null and who.claims.get("scoped_key") == "Kq3_scopedKey-forThis1", got)
+	_check("with the member's name", who != null and who.display_name == "Ada", got)
+
+	var dead: DotResult = await server.authenticate({"access_token": "stale"}, "10.0.5.2")
+	_check("a dead token is a sign-in that is no longer valid",
+		not dead.ok and dead.error.code == DotError.CODE_AUTH, dead)
+	var wrong: DotResult = await server.authenticate({"access_token": "other-app"}, "10.0.5.3")
+	_check("a token for another game is refused as forbidden",
+		not wrong.ok and wrong.error.code == DotError.CODE_FORBIDDEN, wrong)
+
+	var bad := DotAuthIdentity.from_scoped_user({"key": "../x"})
+	_check("a key that is not a key is refused", not bad.ok, bad)
+
+	server.queue_free()
+	fake.free()
 	_done()
 
 

@@ -104,6 +104,43 @@ static func from_backbone_user(d: Dictionary) -> DotResult:
 	return DotResult.success(id)
 
 
+## Builds an identity from the backbone's scoped introspection answer:
+## `{key, name, username}`, where [code]key[/code] is the player's key in the asking
+## server's scope.
+##
+## [b]No account id, on purpose.[/b] The uid is `site:<key>`: stable for this player on
+## this server, and meaningless on any other — so bans and admin entries hold, and two
+## operators comparing their logs learn nothing. The key goes in the `scoped_key` claim
+## as well, which dot-user reads instead of deriving a key of its own; a key derived
+## here could never be resolved by the backbone, which only knows the keys it minted.
+static func from_scoped_user(d: Dictionary) -> DotResult:
+	var key := str(d.get("key", ""))
+
+	# The backbone's own key shape (`ScopeKeyRx`), checked because it becomes a uid,
+	# a file name in a local profile store and a URL path segment.
+	var rx := RegEx.create_from_string("^[A-Za-z0-9_-]{8,64}$")
+
+	if rx.search(key) == null:
+		return DotResult.fail(
+			DotError.CODE_PARSE,
+			"The backbone returned a player with no usable key.",
+			JSON.stringify(d).substr(0, 200)
+		)
+
+	var id := DotAuthIdentity.new()
+	id.provider = "site"
+	id.provider_id = key
+	id.uid = "site:%s" % key
+	id.username = str(d.get("username", "")) if d.get("username") != null else ""
+	id.display_name = str(d.get("name", "")) if d.get("name") != null else ""
+	if id.display_name == "":
+		id.display_name = id.username if id.username != "" else "Player"
+	id.claims = {"scoped_key": key}
+	id.authenticated_at = int(Time.get_unix_time_from_system())
+
+	return DotResult.success(id)
+
+
 static func from_dict(d: Dictionary) -> DotAuthIdentity:
 	var id := DotAuthIdentity.new()
 	id.uid = str(d.get("uid", ""))

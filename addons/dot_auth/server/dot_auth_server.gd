@@ -45,6 +45,25 @@ signal rejected(reason: String, detail: String)
 ## yourself — see [method DotRegistry.register_scoped].
 @export var register_service: bool = true
 
+## The server's own backbone client, holding its integration credential.
+##
+## [b]Set it and INTROSPECT asks the backbone as THIS SERVER[/b] —
+## `POST integration/v1/player/introspect` — and gets back the player's key in this
+## server's scope rather than their account id. That key is the only identifier the
+## backbone's avatar, profile and stats routes resolve for this server, and it is one
+## other operators cannot correlate. Unset, INTROSPECT reads `/api/app/v1/me` as it
+## always has, which answers with the account id and is for first-party servers only.
+var backbone: DotBackboneClient = null
+
+## Refuse an INTROSPECT join while [member backbone] is unset, rather than falling back
+## to `/me`.
+##
+## For a host that hands the client over after boot: the listener opens before the
+## server's integration credential is loaded, and a player let in through `/me` in that
+## window is keyed by their account id — a different identity from the one the same
+## player gets a minute later, so their profile, avatar and bans would split in two.
+var scoped_only: bool = false
+
 var _http: DotHttp = null
 var _limiter: DotRateLimiter = null
 
@@ -480,6 +499,16 @@ func _authenticate_introspect(credential: Dictionary) -> DotResult:
 			DotError.CODE_AUTH, "This server requires you to be signed in."
 		)
 
+	if backbone != null:
+		return await _authenticate_introspect_scoped(token, credential)
+
+	if scoped_only:
+		return DotResult.fail(
+			DotError.CODE_STATE,
+			"This server cannot verify sign-ins yet. Try again in a moment.",
+			"scoped_only is set and no backbone client has been handed over"
+		)
+
 	var res := await _http.get_json(
 		config.me_endpoint(), {"Authorization": "Bearer %s" % token}
 	)
@@ -513,6 +542,47 @@ func _authenticate_introspect(credential: Dictionary) -> DotResult:
 
 	DotLog.info(
 		CHANNEL, "authenticated by introspection", {"user": identity.label()}
+	)
+
+	return DotResult.success(identity)
+
+
+## INTROSPECT through the server's integration credential. See [member backbone].
+##
+## The identity it builds carries no account id at all: [member DotAuthIdentity.uid]
+## is `site:<key>` and the key is in the `scoped_key` claim, which is what dot-user
+## files the profile under and what the backbone's avatar route resolves.
+func _authenticate_introspect_scoped(token: String, credential: Dictionary) -> DotResult:
+	var res := await backbone.post_integration(
+		"player/introspect", {"access_token": token}
+	)
+
+	if not res.ok:
+		if res.error != null and res.error.http_status == 401:
+			return DotResult.fail(
+				DotError.CODE_AUTH, "Your sign-in is no longer valid."
+			)
+		if res.error != null and res.error.http_status == 403:
+			return DotResult.fail(
+				DotError.CODE_FORBIDDEN, "That sign-in cannot be used on this server."
+			)
+		# A backbone outage must not read as "you are not who you say you are".
+		return res.wrap("Could not verify your sign-in right now.")
+
+	var payload: Variant = res.value
+	var user: Variant = (payload as Dictionary).get("user") if payload is Dictionary else null
+
+	var identity_res := DotAuthIdentity.from_scoped_user(
+		user if user is Dictionary else {}
+	)
+	if not identity_res.ok:
+		return identity_res
+
+	var identity: DotAuthIdentity = identity_res.value
+	_apply_requested_name(identity, credential)
+
+	DotLog.info(
+		CHANNEL, "authenticated by scoped introspection", {"user": identity.label()}
 	)
 
 	return DotResult.success(identity)
