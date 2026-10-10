@@ -127,7 +127,7 @@ Run an issuer with `res://examples/issuer.tscn`.
 
 ## Honest limits
 
-`DotAuthServer.hash_password` is salted SHA-256, not argon2, because Godot ships no password KDF. It exists so a LAN server does not store plaintext; real accounts belong on the backbone. And on web the token store's encryption is obfuscation, because the key and the ciphertext share one origin. Both are documented where they matter in [CLAUDE.md](CLAUDE.md#two-things-that-are-weaker-than-they-look).
+`DotAuthServer.hash_password` is salted SHA-256, not argon2, because Godot ships no password KDF. It exists so a LAN server does not store plaintext; real accounts belong on the backbone. And on web the token store's encryption is obfuscation, because the key and the ciphertext share one origin. Both are documented where they matter in [docs/security.md](docs/security.md#two-things-that-are-weaker-than-they-look).
 
 ## Licence
 
