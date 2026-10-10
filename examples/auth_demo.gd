@@ -196,7 +196,7 @@ func _test_scoped_introspect() -> void:
 		fake.asked.size() == 1 and fake.asked[0][0] == "player/introspect"
 			and fake.asked[0][1].get("access_token") == "live", got)
 	_check("the identity is keyed by the site's scoped key, not an account id",
-		who != null and who.uid == "site:Kq3_scopedKey-forThis1", got)
+		who != null and who.uid == "tmc:Kq3_scopedKey-forThis1", got)
 	_check("and carries that key for dot-user to file the profile under",
 		who != null and who.claims.get("scoped_key") == "Kq3_scopedKey-forThis1", got)
 	_check("with the member's name", who != null and who.display_name == "Ada", got)

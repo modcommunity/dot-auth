@@ -550,7 +550,7 @@ func _authenticate_introspect(credential: Dictionary) -> DotResult:
 ## INTROSPECT through the server's integration credential. See [member backbone].
 ##
 ## The identity it builds carries no account id at all: [member DotAuthIdentity.uid]
-## is `site:<key>` and the key is in the `scoped_key` claim, which is what dot-user
+## is `tmc:<key>` and the key is in the `scoped_key` claim, which is what dot-user
 ## files the profile under and what the backbone's avatar route resolves.
 func _authenticate_introspect_scoped(token: String, credential: Dictionary) -> DotResult:
 	var res := await backbone.post_integration(

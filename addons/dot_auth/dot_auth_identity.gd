@@ -108,7 +108,7 @@ static func from_backbone_user(d: Dictionary) -> DotResult:
 ## `{key, name, username}`, where [code]key[/code] is the player's key in the asking
 ## server's scope.
 ##
-## [b]No account id, on purpose.[/b] The uid is `site:<key>`: stable for this player on
+## [b]No account id, on purpose.[/b] The uid is `tmc:<key>` (TMC, the site that minted it): stable for this player on
 ## this server, and meaningless on any other — so bans and admin entries hold, and two
 ## operators comparing their logs learn nothing. The key goes in the `scoped_key` claim
 ## as well, which dot-user reads instead of deriving a key of its own; a key derived
@@ -128,9 +128,9 @@ static func from_scoped_user(d: Dictionary) -> DotResult:
 		)
 
 	var id := DotAuthIdentity.new()
-	id.provider = "site"
+	id.provider = "tmc"
 	id.provider_id = key
-	id.uid = "site:%s" % key
+	id.uid = "tmc:%s" % key
 	id.username = str(d.get("username", "")) if d.get("username") != null else ""
 	id.display_name = str(d.get("name", "")) if d.get("name") != null else ""
 	if id.display_name == "":
