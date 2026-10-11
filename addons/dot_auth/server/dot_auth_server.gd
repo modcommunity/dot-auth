@@ -24,6 +24,11 @@ extends Node
 ##
 ## Registers itself in [DotRegistry] as [code]dot_auth_server[/code] so
 ## dot-server can find it without a hard dependency in either direction.
+##
+## [b]It also builds the [DotAuthSessionReporter][/b] when the config names an issuer
+## to report to ([member DotAuthConfig.session_report_url]), and points it at the
+## [code]dot_server[/code] it finds in [DotRegistry]. See [member session_reporter] for
+## why here and not in dot-game or dot-server.
 
 const CHANNEL := "auth.server"
 
@@ -44,6 +49,25 @@ signal rejected(reason: String, detail: String)
 ## Turn off when running two servers in one process and register scoped names
 ## yourself — see [method DotRegistry.register_scoped].
 @export var register_service: bool = true
+
+## Build a [DotAuthSessionReporter] when [member DotAuthConfig.session_report_url] is
+## set. Off for a host that builds and feeds its own.
+@export var create_session_reporter: bool = true
+
+## The reporter this server built, or null (no [code]session_report_url[/code], or
+## [member create_session_reporter] off).
+##
+## [b]Why the auth server builds it.[/b] The reporter's lifetime is the server
+## process's and its config is this node's: the issuer key, URL and server id are
+## [DotAuthConfig] fields the host already hands here. The alternatives each get one of
+## those wrong. dot-game's [code]DotGameModule[/code] is per GAME: a game change would
+## unload it with every player still connected (so it could neither say goodbye nor
+## stay silent honestly), and arena, g2gfast, hungario and playground are not on it.
+## Games never own authentication; the host's [code]dot_auth_server[/code] is the same
+## for every game it runs. dot-server never names dot-auth. So it lives beside the
+## config it reads, and reaches dot-server by duck type through [DotRegistry], the way
+## dot-server reaches this node.
+var session_reporter: DotAuthSessionReporter = null
 
 ## The server's own backbone client, holding its integration credential.
 ##
@@ -210,6 +234,8 @@ func start() -> DotResult:
 	if register_service:
 		DotRegistry.register(SERVICE, self)
 
+	_build_session_reporter()
+
 	_started = true
 
 	DotLog.info(
@@ -238,6 +264,38 @@ func local_profiles() -> DotLocalProfileProvider:
 func _exit_tree() -> void:
 	if register_service:
 		DotRegistry.unregister_instance(SERVICE, self)
+	if DotRegistry.signals().service_registered.is_connected(_on_service_registered):
+		DotRegistry.signals().service_registered.disconnect(_on_service_registered)
+
+
+## Off, and silent, unless the config names an issuer: a server with no
+## session_report_url has no backbone to tell, and that is most of them.
+## [method DotAuthConfig.validate] has already refused a URL without a key or a server id.
+func _build_session_reporter() -> void:
+	if not create_session_reporter or session_reporter != null:
+		return
+	if config.session_report_url.strip_edges() == "":
+		return
+
+	session_reporter = DotAuthSessionReporter.new()
+	session_reporter.name = "SessionReporter"
+	session_reporter.config = config
+	add_child(session_reporter)
+
+	# The dot-server may boot before or after this node starts.
+	var server := DotRegistry.get_service(&"dot_server")
+	if server != null:
+		session_reporter.follow_server(server)
+	else:
+		DotRegistry.signals().service_registered.connect(_on_service_registered)
+		DotLog.debug(CHANNEL, "session reporter waiting for a dot_server to follow")
+
+
+func _on_service_registered(service: StringName, instance: Object) -> void:
+	if service != &"dot_server" or session_reporter == null:
+		return
+	DotRegistry.signals().service_registered.disconnect(_on_service_registered)
+	session_reporter.follow_server(instance)
 
 
 # --- Authentication --------------------------------------------------------
@@ -804,6 +862,9 @@ func describe() -> Dictionary:
 		"rejected": _stats["rejected"],
 		"spent_tickets": _spent_tickets.size(),
 		"local_accounts": _accounts.size(),
+		"session_reporter": (
+			session_reporter.describe() if session_reporter != null else null
+		),
 	}
 
 

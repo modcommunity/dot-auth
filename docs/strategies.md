@@ -59,7 +59,7 @@ Rate limiting runs before providers, so a custom provider cannot be used to make
 
 ## Coupling with dot-server
 
-dot-auth and dot-server do not import each other; either works alone. `DotAuthServer` registers itself in `DotRegistry` as `dot_auth_server`, and `DotAuthAdminSource` satisfies dot-server's admin-source contract (`lookup(identity) -> DotResult{flags, immunity, source}` plus `source_name()`) by duck typing. Keep it that way: a hard dependency in either direction makes both harder to adopt.
+dot-auth and dot-server do not import each other; either works alone. `DotAuthServer` registers itself in `DotRegistry` as `dot_auth_server`, and `DotAuthAdminSource` satisfies dot-server's admin-source contract (`lookup(identity) -> DotResult{flags, immunity, source}` plus `source_name()`) by duck typing. The other direction is duck-typed too: `DotAuthServer` finds `dot_server` in `DotRegistry` for its session reporter and reads only `sessions()`, `uid()`, `is_authenticated()`, `state_changed` and `state_name()` ([tickets](tickets.md#who-builds-the-reporter-and-which-stops-it-reports)). dot-server is linked into this project only for that suite. Keep it that way: a hard dependency in either direction makes both harder to adopt.
 
 ## Deliberately not here
 

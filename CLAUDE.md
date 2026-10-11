@@ -4,7 +4,7 @@ Open-source authentication for Godot games and dedicated servers, wired to the w
 
 Read the family [CLAUDE.md](../../CLAUDE.md) and [docs/backbone.md](../../docs/backbone.md) first; this file is only what is specific to authentication. The reasoning is in [docs/](docs/README.md).
 
-**The distributable is `addons/dot_auth/`. It requires dot-core**, linked locally (`ln -s ../../dot-core/addons/dot_core addons/dot_core`, gitignored; [development setup](../../docs/development-setup.md)). dot-auth and dot-server never import each other. [strategies](docs/strategies.md#coupling-with-dot-server)
+**The distributable is `addons/dot_auth/`. It requires dot-core** (API level in `dot_auth_api.gd`), linked locally (`ln -s ../../dot-core/addons/dot_core addons/dot_core`, gitignored; [development setup](../../docs/development-setup.md)). dot-auth and dot-server never import each other. [strategies](docs/strategies.md#coupling-with-dot-server)
 
 ## Read before
 
@@ -29,12 +29,14 @@ Read the family [CLAUDE.md](../../CLAUDE.md) and [docs/backbone.md](../../docs/b
 | `addons/dot_auth/server/` | `DotAuthTicket` (read the class doc), `DotAuthIssuer` (minting and the session table), `DotAuthSessionReporter`, `DotAuthProvider`, `DotAuthServer` (registers as `dot_auth_server`) |
 | `addons/dot_auth/backbone/` | `DotBackboneClient`: server self-reporting; `post_integration` / `get_integration` are the seams other addons use |
 | `addons/dot_auth/bridge/` | `DotAuthAdminSource`: site groups to server permission flags, duck-typed for dot-server |
+| `addons/dot_auth/dot_auth_api.gd` | the API level (`LEVEL`, `OLDEST`); the bump rule is on `DotAddonApi` |
 | `examples/auth_demo.tscn` | the suite, offline (binds `127.0.0.1:18787` for the issuer's listener; skips those checks with a line if the port is taken) |
+| `examples/session_reporter_selftest.tscn` | a stopping `DotServer` frees its players' seats on its report; needs dot-server linked (`ln -s ../../dot-server/addons/dot_server addons/dot_server`, gitignored); binds `127.0.0.1:18795`-`18799` |
 | `examples/issuer.tscn` | the issuer as a daemon; never exits, so no smoke test covers it |
 
 ## Running and testing
 
-- The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `godot --headless --path . res://examples/auth_demo.tscn`. Exits non-zero on any failure. It covers everything but the device flow itself, which needs a live backbone and a person clicking Approve.
+- The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `godot --headless --path . res://examples/auth_demo.tscn` and `timeout 120 godot --headless --path . res://examples/session_reporter_selftest.tscn`. Each exits non-zero on any failure. auth_demo covers everything but the device flow itself, which needs a live backbone and a person clicking Approve.
 - **Add a case to the demo for any change to the ticket, JWT or admin-mapping paths**: a bug there is a vulnerability rather than a crash.
 - Changing the issuer's listener: drive it with a socket that writes headers and body separately; one `curl` passes either way. [tickets](docs/tickets.md#running-the-issuer)
 
@@ -45,7 +47,8 @@ Read the family [CLAUDE.md](../../CLAUDE.md) and [docs/backbone.md](../../docs/b
 - A server never receives a player's backbone token on a public server: `TICKET` is for public servers, `INTROSPECT` for first-party only. A client sends only the credential asked for. [tickets](docs/tickets.md#the-central-design-problem-and-the-answer)
 - A ticket is audience-scoped, minutes long, single-use and RS256. `validate()` refuses `TICKET` without `server_id` and replay memory not longer than the ticket's life. [tickets](docs/tickets.md#the-central-design-problem-and-the-answer)
 - `single_session` lives on the issuer; rosters are absolute; an unconfirmed session is never ended by a roster; `session_lease_sec >= ticket_ttl_sec`; server keys are per server. [tickets](docs/tickets.md#one-seat-per-account)
-- `DotAuthSessionReporter` is not created by dot-server or any game yet; not yet converted, reason unknown. [tickets](docs/tickets.md#one-seat-per-account)
+- `DotAuthServer` builds the `DotAuthSessionReporter` when `session_report_url` is set and follows the registry's `dot_server`; the roster is every signed-on session, not only those in play. [tickets](docs/tickets.md#who-builds-the-reporter-and-which-stops-it-reports)
+- The goodbye is synchronous (`report_offline_now()`, bounded): `shutdown()` and `quit()` report; SIGINT/SIGTERM/kill do not and fall to the lease. [tickets](docs/tickets.md#who-builds-the-reporter-and-which-stops-it-reports)
 - The issuer's listener goes behind a reverse proxy; requests are buffered across polls and bounded in total, not per read. [tickets](docs/tickets.md#running-the-issuer)
 
 **Accounts**
@@ -73,7 +76,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) and [docs/backbone.md](../../docs/b
 | --- | --- |
 | How a server authenticates | `DotAuthConfig.strategy`, `allow_guests`, `allow_local_profiles` |
 | A new sign-in method | `DotAuthProvider` subclass, `auth_server.add_provider(...)` |
-| One seat per account | `DotAuthConfig.single_session`, plus a `DotAuthSessionReporter` with `roster_provider` |
+| One seat per account | `DotAuthConfig.single_session` on the issuer; `session_report_url` / `_key` on the server (the auth server builds the reporter); `create_session_reporter = false` plus your own `roster_provider` for a host without dot-server |
 | Which site groups are admins | `DotAuthAdminSource` and `role_flags` |
 | Where the backbone is | `backbone_url` via env, argv or JSON (web: a shipped JSON file) |
 | What a server reports to the site | `DotBackboneClient.report_stats` / `report_users`, `report_roster` |

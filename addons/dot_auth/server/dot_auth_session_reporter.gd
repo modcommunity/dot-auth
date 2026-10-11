@@ -16,13 +16,29 @@ extends Node
 ## current uids rather than pushing joins and leaves, and a report lost in
 ## transit costs one interval, not a stuck record.
 ##
+## [b]A host does not usually build one.[/b] [DotAuthServer] creates it as its own
+## child when [member DotAuthConfig.session_report_url] is set, and points it at the
+## [code]dot_server[/code] in [DotRegistry] with [method follow_server]. Built by hand
+## (a host with its own roster, or no dot-server):
+##
 ## [codeblock]
 ## var reporter := DotAuthSessionReporter.new()
 ## reporter.config = auth_config           # session_report_url, _key, server_id
 ## reporter.roster_provider = func() -> Array:
-##     return server.playing_sessions().map(func(s): return s.identity.uid)
+##     return my_players.map(func(p): return p.uid)
 ## add_child(reporter)
+## # and before the process stops:
+## reporter.report_offline_now()
 ## [/codeblock]
+##
+## [b]Which shutdowns say goodbye.[/b] The empty roster goes out, blocking for at most
+## [member offline_timeout_sec], when a followed server enters SHUTTING_DOWN and when
+## this node leaves the tree, which [code]SceneTree.quit()[/code] (the console's
+## [code]quit[/code], a scheduled restart) does to every node. Blocking, because both
+## happen with the process about to end, and an asynchronous request is freed with the
+## tree before it is answered. SIGINT and SIGTERM do NOT reach here: headless Godot
+## runs no notification at all for them, so a server stopped with Ctrl+C, [code]kill[/code],
+## a container stop or a crash leaves its players to the issuer's lease.
 ##
 ## Authenticated to the issuer with [member DotAuthConfig.session_report_key],
 ## which the publisher issues per server. It travels as a bearer token over the
@@ -53,12 +69,21 @@ signal reported(result: DotResult)
 ## sent and a join that raced a report is in the next one.
 var roster_provider: Callable = Callable()
 
+## How long the goodbye in [method report_offline_now] may hold up a process that is
+## stopping. An issuer that does not answer in this long is treated as unreachable and
+## the players fall back to its lease.
+@export_range(0.5, 30.0, 0.5) var offline_timeout_sec: float = 3.0
+
 var _http: DotHttp = null
 var _timer: Timer = null
 var _started: bool = false
 var _report_count: int = 0
 var _last_error: String = ""
 var _last_sent: int = 0
+## The empty roster has been delivered since the last real one, so leaving the tree
+## does not send it twice.
+var _offline_sent: bool = false
+var _server: WeakRef = null
 
 
 func _ready() -> void:
@@ -152,6 +177,9 @@ func report(roster: Array) -> DotResult:
 	if res.ok:
 		_report_count += 1
 		_last_sent = uids.size()
+		# A roster after a goodbye (a server stopped and booted again) means the next
+		# stop has to say goodbye again.
+		_offline_sent = uids.is_empty()
 		_last_error = ""
 		DotLog.debug(CHANNEL, "roster reported", {"players": uids.size()})
 	else:
@@ -179,11 +207,203 @@ func report(roster: Array) -> DotResult:
 ##
 ## Without it every player on a server that stops is held at the issuer for the
 ## lease, unable to join anywhere else, for no better reason than that nobody
-## said goodbye.
+## said goodbye. Asynchronous: only for a host that keeps the process alive until it
+## returns. One about to quit wants [method report_offline_now].
 func report_offline() -> DotResult:
 	if not _started:
 		return DotResult.success(false)
 	return await report([])
+
+
+## Reports an empty roster [i]synchronously[/i], for a process that is about to end.
+##
+## [method report_offline] goes through [DotHttp], an [HTTPRequest] the tree polls; when
+## the tree is being torn down that node is freed before the issuer answers, and the
+## request may never leave. This drives an [HTTPClient] in a loop on the calling thread
+## for at most [member offline_timeout_sec], so the goodbye is on the wire, and answered,
+## before the call returns. Sends once: a second call before a new roster is a no-op.
+##
+## Not on the web, where [HTTPClient] is [code]fetch()[/code] underneath and cannot be
+## waited for; a browser tab is never a server anyway (it cannot listen).
+func report_offline_now() -> DotResult:
+	if not _started:
+		return DotResult.success(false)
+	if _offline_sent:
+		return DotResult.success(true)
+	if DotPlatform.is_web():
+		return DotResult.fail(
+			DotError.CODE_UNSUPPORTED, "A browser cannot block on a request."
+		)
+
+	var res := _post_blocking(
+		{"serverId": config.server_id, "users": []}, offline_timeout_sec
+	)
+
+	if res.ok:
+		_offline_sent = true
+		_report_count += 1
+		_last_sent = 0
+		_last_error = ""
+		DotLog.info(CHANNEL, "told the issuer this server is empty", {
+			"server": config.server_id,
+		})
+	else:
+		_last_error = res.error.message
+		DotLog.warn(
+			CHANNEL,
+			"could not tell the issuer this server stopped; its players are held "
+			+ "for the lease",
+			{"why": res.error.message, "lease": "the issuer's session_lease_sec"}
+		)
+
+	reported.emit(res)
+	return res
+
+
+## Reports [param server]'s signed-on players and says goodbye when it stops.
+##
+## Duck-typed so dot-auth names nothing of dot-server's: anything with a
+## [code]sessions()[/code] list (each answering [code]uid()[/code] and, if it has one,
+## [code]is_authenticated()[/code]), a [code]state_changed[/code] signal and a
+## [code]state_name()[/code] that says [code]SHUTTING_DOWN[/code].
+##
+## [b]Every signed-on session, not only those in play.[/b] A player loading a map, or
+## reloading through a game change, is still on this server; a roster that omitted them
+## would end a confirmed session and let them take a ticket for another server
+## mid-load. Guests are dropped by [method normalise_roster].
+##
+## Keeps a weak reference: the server going away leaves the provider answering
+## [code]null[/code], and a report that does not know the roster is not sent (an
+## empty one would free everybody who is in fact still playing).
+func follow_server(server: Object) -> void:
+	if server == null:
+		return
+	_server = weakref(server)
+	if not roster_provider.is_valid():
+		roster_provider = _server_roster
+	if server.has_signal("state_changed") \
+		and not server.is_connected("state_changed", _on_server_state):
+		server.connect("state_changed", _on_server_state)
+
+
+func _server_roster() -> Variant:
+	var server: Object = _server.get_ref() if _server != null else null
+	if server == null or not server.has_method("sessions"):
+		return null
+
+	var out: Array = []
+	for session in server.call("sessions"):
+		if session == null:
+			continue
+		if session.has_method("is_authenticated") \
+			and not bool(session.call("is_authenticated")):
+			continue
+		if session.has_method("uid"):
+			out.append(str(session.call("uid")))
+		else:
+			out.append(session)
+	return out
+
+
+func _on_server_state(_state: Variant) -> void:
+	var server: Object = _server.get_ref() if _server != null else null
+	if server == null or not server.has_method("state_name"):
+		return
+	if str(server.call("state_name")) == "SHUTTING_DOWN":
+		report_offline_now()
+
+
+func _exit_tree() -> void:
+	if Engine.is_editor_hint():
+		return
+	# Leaving the tree is the last moment this node can speak: `quit()` takes every
+	# node out of the tree before the process ends, and a reporter that is gone reports
+	# nobody, which the issuer should hear rather than infer from a silent lease.
+	if _started and not _offline_sent:
+		report_offline_now()
+
+
+## One JSON POST to the issuer's /session, on this thread, bounded by [param timeout].
+func _post_blocking(payload: Dictionary, timeout: float) -> DotResult:
+	var url := config.session_report_url.strip_edges().trim_suffix("/")
+	var tls := false
+	if url.to_lower().begins_with("https://"):
+		tls = true
+		url = url.substr(8)
+	elif url.to_lower().begins_with("http://"):
+		url = url.substr(7)
+
+	var slash := url.find("/")
+	var host_port := url if slash < 0 else url.substr(0, slash)
+	var prefix := "" if slash < 0 else url.substr(slash)
+	var host := host_port
+	var port := 443 if tls else 80
+	var colon := host_port.rfind(":")
+	if colon > 0 and host_port.substr(colon + 1).is_valid_int():
+		host = host_port.substr(0, colon)
+		port = host_port.substr(colon + 1).to_int()
+
+	var deadline := Time.get_ticks_msec() + int(timeout * 1000.0)
+	var client := HTTPClient.new()
+	var err := client.connect_to_host(
+		host, port, TLSOptions.client() if tls else null
+	)
+	if err != OK:
+		return DotResult.fail(DotError.CODE_NETWORK, "Could not reach the issuer.", host)
+
+	var waiting := [HTTPClient.STATUS_RESOLVING, HTTPClient.STATUS_CONNECTING]
+	while client.get_status() in waiting:
+		client.poll()
+		if Time.get_ticks_msec() > deadline:
+			client.close()
+			return DotResult.fail(DotError.CODE_TIMEOUT, "The issuer did not answer.")
+		OS.delay_msec(2)
+
+	if client.get_status() != HTTPClient.STATUS_CONNECTED:
+		client.close()
+		return DotResult.fail(DotError.CODE_NETWORK, "Could not reach the issuer.", host)
+
+	err = client.request(
+		HTTPClient.METHOD_POST,
+		prefix + "/session",
+		PackedStringArray([
+			"Content-Type: application/json",
+			"Authorization: Bearer %s" % config.session_report_key,
+		]),
+		JSON.stringify(payload)
+	)
+	if err != OK:
+		client.close()
+		return DotResult.fail(DotError.CODE_NETWORK, "The report could not be sent.")
+
+	while client.get_status() == HTTPClient.STATUS_REQUESTING:
+		client.poll()
+		if Time.get_ticks_msec() > deadline:
+			client.close()
+			return DotResult.fail(DotError.CODE_TIMEOUT, "The issuer did not answer.")
+		OS.delay_msec(2)
+
+	if not client.has_response():
+		client.close()
+		return DotResult.fail(DotError.CODE_NETWORK, "The issuer closed the connection.")
+
+	var status := client.get_response_code()
+	client.close()
+
+	if status == 401:
+		var refused := DotError.make(
+			DotError.CODE_AUTH, "The issuer does not recognise this server's key."
+		)
+		refused.http_status = status
+		return DotResult.failure(refused)
+	if status < 200 or status >= 300:
+		var failed := DotError.make(
+			DotError.CODE_HTTP, "The issuer answered %d." % status
+		)
+		failed.http_status = status
+		return DotResult.failure(failed)
+
+	return DotResult.success(true)
 
 
 ## The uids in a roster, deduplicated, in order, with guests left out.
@@ -231,4 +451,6 @@ func describe() -> Dictionary:
 		"last_sent": _last_sent,
 		"interval": config.session_report_interval_sec if config != null else 0.0,
 		"last_error": _last_error,
+		"offline_sent": _offline_sent,
+		"following_server": _server != null and _server.get_ref() != null,
 	}

@@ -6,6 +6,9 @@
 #   ln -s ../../dot-core/addons/dot_core addons/dot_core
 # Consumers copy both addons into their own project.
 /addons/dot_core
+# dot-server, for examples/session_reporter_selftest.tscn only (the addon never names it):
+#   ln -s ../../dot-server/addons/dot_server addons/dot_server
+/addons/dot_server
 
 # Exports
 build/

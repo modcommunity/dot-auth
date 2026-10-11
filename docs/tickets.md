@@ -53,7 +53,25 @@ Rules that were each the answer to a bug:
 - **Server keys are per server, in a file (`session_keys_file`), and at least 16 characters.** A report can only speak for the server whose key it carries. Unknown server and wrong key answer identically, in constant time. Without a key anyone could report any player as being anywhere, locking them out of everywhere else on the strength of a POST.
 - **The refusal names the server.** "You are already connected to eu-west-1" is the player's own whereabouts and is what they need to act on. `DotAuthClient._issuer_refusal()` carries it through `DotHttp`'s generic "Not allowed." by keeping the issuer's `{error, code}` body as the error's detail.
 
-**The game side is not wired yet.** Nothing in dot-server, dot-game or any game creates a `DotAuthSessionReporter` today (game-hungario and dot-server-deploy create a `DotBackboneClient`, which is a different report). A host gives the reporter its roster as uids through `roster_provider` and calls `report_offline()` before it stops. Not yet converted; reason unknown. Until it is, `single_session` relies on the release call and the lease.
+### Who builds the reporter, and which stops it reports
+
+**`DotAuthServer` builds the `DotAuthSessionReporter` itself** when `session_report_url` is set (off, and silent, without one; `create_session_reporter = false` for a host that builds its own). It finds the `dot_server` in `DotRegistry` (now, or when one registers) and calls `follow_server()`, which takes the roster from `sessions()`, every signed-on session rather than only those in play, because a player loading a map or reloading through a game change is still on this server and dropping them from a roster would end a confirmed seat mid-load. Guests are dropped by `normalise_roster`.
+
+It lives on the auth server rather than in dot-game or dot-server because its lifetime is the server process's and its config is `DotAuthConfig`. dot-game's `DotGameModule` is per game: a game change unloads it with every player still connected, and arena, g2gfast, hungario and playground are not on it. Games never own authentication; the host's `dot_auth_server` is the same for every game it runs. dot-server never names dot-auth. The reasoning is also on `DotAuthServer.session_reporter`.
+
+**The goodbye is synchronous.** `report_offline_now()` drives an `HTTPClient` on the calling thread for at most `offline_timeout_sec` (3 s), because both moments it is sent are the process ending: an `HTTPRequest` is freed with the tree before the issuer answers. `report_offline()` (asynchronous) remains for a host that keeps the process alive until it returns.
+
+| A server that stops by | Reports? | Its players |
+| --- | --- | --- |
+| `DotServer.shutdown()` | yes, on the `SHUTTING_DOWN` state change, before the sessions are cleared | free at once |
+| `SceneTree.quit()`: the console's `quit`, a scheduled restart, a host's exit | yes, from the reporter's `_exit_tree` (children leave first, so before DotServer's own shutdown). Checked against a separate fake issuer process | free at once |
+| SIGINT (Ctrl+C, the panel egg's stop), SIGTERM (`kill`, `docker stop`) | **no**: headless Godot 4.7.2 runs no notification on either (measured again 2026-10-11) | held for `session_lease_sec` |
+| SIGKILL, a crash, a lost network | no | held for `session_lease_sec` |
+| An issuer that does not answer | tried, gives up after `offline_timeout_sec` with a warning | held for `session_lease_sec` |
+
+So a deployment that wants seats freed on stop has to stop with `quit` on the console, not with a signal. The leaving-the-tree path cannot tell a quit from a host removing the auth server on purpose; either way nothing reports this server any more, and the issuer hears so.
+
+`examples/session_reporter_selftest.tscn` proves the first two rows against real `DotServer`s and a fake issuer socket on a thread (a blocking send cannot be answered by an issuer polled on the same main thread), and keeps the control: with the reporter switched off the same stop leaves the seat held.
 
 ## Running the issuer
 
