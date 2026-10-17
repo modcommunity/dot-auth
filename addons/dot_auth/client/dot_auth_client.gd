@@ -30,6 +30,10 @@ extends Node
 
 const CHANNEL := "auth"
 
+## The registry name this client takes, so a game running under a shell that signed the
+## player in can find out who it is without being handed the shell's internals.
+const SERVICE := &"dot_auth_client"
+
 ## Emitted once the backbone has issued a device code.
 ##
 ## [param verification_uri_complete] has the code pre-filled and is what to open;
@@ -87,6 +91,11 @@ var _started: bool = false
 func _ready() -> void:
 	if Engine.is_editor_hint():
 		return
+
+	# Before start(): a game that looks this up must find it even while a stored session is
+	# still being restored, and read is_signed_in() / the signed_in signal from there.
+	if not DotRegistry.has(SERVICE):
+		DotRegistry.register(SERVICE, self)
 
 	var ok := start()
 	if not ok.ok:
@@ -686,6 +695,15 @@ func identity() -> DotAuthIdentity:
 
 func is_signed_in() -> bool:
 	return _identity != null and store.has_credentials()
+
+
+## A stable, non-secret key for the signed-in account, or "" for a guest: the identity's
+## uid (the backbone's public user id), never a token. What a game files per-account local
+## state under (a remembered loadout), so two accounts on one machine keep their own.
+func account_key() -> String:
+	if not is_signed_in():
+		return ""
+	return _identity.uid
 
 
 ## Re-reads the player's profile from `/api/app/v1/me`.
