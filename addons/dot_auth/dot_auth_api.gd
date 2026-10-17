@@ -10,5 +10,7 @@ extends RefCounted
 # 2: DotAuthSessionReporter.report_offline_now(), follow_server() and offline_timeout_sec;
 #    DotAuthServer.session_reporter and create_session_reporter (the auth server builds the
 #    reporter itself when session_report_url is set).
-const LEVEL := 2
+# 3: DotAuthClient.SERVICE (the client registers itself as `dot_auth_client`, which is
+#    the name DotClientLink looks up to attach a sign-in) and DotAuthClient.account_key().
+const LEVEL := 3
 const OLDEST := 1
