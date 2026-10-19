@@ -12,5 +12,6 @@ extends RefCounted
 #    reporter itself when session_report_url is set).
 # 3: DotAuthClient.SERVICE (the client registers itself as `dot_auth_client`, which is
 #    the name DotClientLink looks up to attach a sign-in) and DotAuthClient.account_key().
-const LEVEL := 3
+# 4: DotAuthClient.redeem_handoff(code), the launcher's sign-in code on any platform.
+const LEVEL := 4
 const OLDEST := 1

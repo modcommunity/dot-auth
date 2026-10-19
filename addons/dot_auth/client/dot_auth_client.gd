@@ -255,10 +255,60 @@ func try_web_handoff(wait_sec: float = 3.0) -> DotResult:
 		)
 		config.backbone_url = origin
 
+	var accepted := await _redeem_code(redeem_url, str(code_block.get("code", "")))
+
+	# Spent either way. A handoff is single-use, so a code that reached the
+	# backbone is worthless whatever came back, and leaving it on the page only
+	# buys a retry that is guaranteed to fail.
+	DotAuthWebHandoff.consume()
+
+	if not accepted.ok:
+		return accepted.wrap("The page's sign-in code was not accepted.")
+
+	DotLog.info(CHANNEL, "signed in from the page's handoff")
+	return accepted
+
+
+## Signs in from a handoff code a LAUNCHER passed in, on any platform.
+##
+## The native twin of [method try_web_handoff]: the site mints the same single-use,
+## sixty-second code when the TMC app launches a desktop build, and the app hands it
+## to the process it starts. Redeemed exactly as the page's code is, for a game-scoped
+## credential bound to the app it was minted for.
+##
+## [b]Redeemed at this client's own backbone, never at a URL the launcher names.[/b]
+## The web path may take the page's origin because the page IS the backbone; a native
+## process has no page, and a redeem URL from argv would let whoever wrote a shortcut
+## aim a member's code at a host of their choosing. Point [member DotAuthConfig.backbone_url]
+## at the site that minted it (`--auth-backbone-url`, `DOT_AUTH_BACKBONE_URL` or the
+## JSON file) instead.
+##
+## Every refusal (empty, unknown, expired, already spent) is a failed [DotResult] the
+## caller falls through to a guest on, like every "no" from [method try_web_handoff].
+func redeem_handoff(code: String) -> DotResult:
+	code = code.strip_edges()
+	if code == "":
+		return DotResult.fail(DotError.CODE_INVALID, "No sign-in code was given.")
+
+	if not _started:
+		var s := start()
+		if not s.ok:
+			return s
+
+	var accepted := await _redeem_code(config.app_endpoint("auth/handoff"), code)
+	if not accepted.ok:
+		return accepted.wrap("The launcher's sign-in code was not accepted.")
+
+	DotLog.info(CHANNEL, "signed in from the launcher's handoff")
+	return accepted
+
+
+## Posts [param code] to [param redeem_url] and accepts the credential pair it buys.
+func _redeem_code(redeem_url: String, code: String) -> DotResult:
 	var res := await _http.post_json(
 		redeem_url,
 		{
-			"code": str(code_block.get("code", "")),
+			"code": code,
 			"client": {
 				"name": config.client_name,
 				# The backbone's ClientInfoSchema has no "web" member, so a
@@ -270,24 +320,14 @@ func try_web_handoff(wait_sec: float = 3.0) -> DotResult:
 		}
 	)
 
-	# Spent either way. A handoff is single-use, so a code that reached the
-	# backbone is worthless whatever came back, and leaving it on the page only
-	# buys a retry that is guaranteed to fail.
-	DotAuthWebHandoff.consume()
-
 	if not res.ok:
-		return res.wrap("The page's sign-in code was not accepted.")
+		return res
 
 	var unwrapped := _unwrap(res.value)
 	if not unwrapped.ok:
 		return unwrapped
 
-	var accepted := _accept_tokens(unwrapped.value)
-
-	if accepted.ok:
-		DotLog.info(CHANNEL, "signed in from the page's handoff")
-
-	return accepted
+	return _accept_tokens(unwrapped.value)
 
 
 ## Waits briefly for the page to post its auth block.

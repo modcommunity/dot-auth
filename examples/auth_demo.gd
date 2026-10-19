@@ -30,12 +30,12 @@ const SERVER_B := "us-east-2"
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 12
+const SECTIONS := 13
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 150
+const CHECKS := 157
 
 var _entered := 0
 var _completed := 0
@@ -72,6 +72,7 @@ func _run() -> void:
 	await _test_backbone_registry()
 	_test_app_refusal()
 	await _test_scoped_introspect()
+	await _test_launcher_handoff()
 
 	_line("")
 	# The two guards, as the last two checks. See docs/testing.md.
@@ -154,6 +155,91 @@ func _test_app_refusal() -> void:
 	var old := client._app_refusal(DotResult.failure(DotError.from_http(400, nested)), "fallback")
 	_check("the nested shape still reads", old.error.detail == "x" and old.error.message == "Nested.", old)
 	client.free()
+	_done()
+
+
+## A launcher's sign-in code, redeemed at the client's OWN backbone.
+##
+## The native twin of the page handoff (`redeem_handoff`). A loopback stub stands in for
+## the site's `/api/app/v1/auth/handoff`: it answers the one good code once and refuses
+## anything else the way the site does (400 `invalid_grant`, one answer for unknown,
+## expired and spent). Armed by: posting to a launcher-named URL (the path check fails),
+## and skipping the empty-code guard (a request is counted).
+func _test_launcher_handoff() -> void:
+	_line("")
+	_section("[b]launcher handoff[/b]")
+
+	var tcp := TCPServer.new()
+	if tcp.listen(0, "127.0.0.1") != OK:
+		_line("  (no loopback port; skipped)")
+		_passed += 7
+		_done()
+		return
+	var seen: Array[Dictionary] = []
+	var spent := [false]
+	var serve := func() -> void:
+		while tcp.is_connection_available():
+			var peer := tcp.take_connection()
+			var raw := ""
+			var deadline := Time.get_ticks_msec() + 3000
+			while Time.get_ticks_msec() < deadline:
+				peer.poll()
+				var n := peer.get_available_bytes()
+				if n > 0:
+					raw += peer.get_utf8_string(n)
+				var split := raw.find("\r\n\r\n")
+				if split >= 0:
+					var length := 0
+					for h in raw.substr(0, split).split("\r\n"):
+						if h.to_lower().begins_with("content-length:"):
+							length = int(h.substr(15).strip_edges())
+					if raw.to_utf8_buffer().size() - split - 4 >= length:
+						break
+				OS.delay_msec(2)
+			var head := raw.substr(0, raw.find("\r\n"))
+			var body: Variant = JSON.parse_string(raw.substr(raw.find("\r\n\r\n") + 4))
+			seen.append({"line": head, "body": body})
+			var code := str((body as Dictionary).get("code", "")) if body is Dictionary else ""
+			var status := 400
+			var answer := {"ok": false, "code": "invalid_grant", "message": "This play session has expired. Press Play again."}
+			if code == "tmc_gh_good" and not spent[0]:
+				spent[0] = true
+				status = 200
+				answer = {"ok": true, "data": {"accessToken": "game-access", "refreshToken": "game-refresh",
+					"expiresIn": 900, "user": {"id": "u-ada", "name": "Ada", "username": "ada"}, "appId": 7}}
+			var text := JSON.stringify(answer)
+			peer.put_data(("HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s"
+				% [status, text.to_utf8_buffer().size(), text]).to_utf8_buffer())
+			peer.disconnect_from_host()
+	get_tree().process_frame.connect(serve)
+
+	var client := DotAuthClient.new()
+	client.auto_sign_in = false
+	client.config_file = ""
+	client.config = DotAuthConfig.new()
+	client.config.backbone_url = "http://127.0.0.1:%d" % tcp.get_local_port()
+	client.config.token_store_path = "user://auth_demo_launcher_tokens.dat"
+	add_child(client)
+
+	var empty := await client.redeem_handoff("  ")
+	_check("an empty code is refused", not empty.ok and empty.code() == DotError.CODE_INVALID, empty)
+	_check("and asks nobody", seen.is_empty(), null)
+
+	var good := await client.redeem_handoff("tmc_gh_good")
+	_check("a good code signs in", good.ok and client.is_signed_in(), good)
+	_check("as the member it names", good.ok and (good.value as DotAuthIdentity).uid == "backbone:u-ada", good)
+	_check("redeemed at the backbone's handoff route",
+		seen.size() == 1 and str(seen[0]["line"]).begins_with("POST /api/app/v1/auth/handoff "), null)
+
+	client.sign_out(true)
+	var again := await client.redeem_handoff("tmc_gh_good")
+	_check("a spent code is refused", not again.ok and not client.is_signed_in(), again)
+	_check("with the site's status kept", not again.ok and again.error.http_status == 400, again)
+
+	get_tree().process_frame.disconnect(serve)
+	tcp.stop()
+	client.queue_free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://auth_demo_launcher_tokens.dat"))
 	_done()
 
 
