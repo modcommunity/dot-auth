@@ -7,9 +7,18 @@
 | Strategy | Use | Cost |
 | --- | --- | --- |
 | `TICKET` | **Public servers.** | Needs a publisher-run issuer. No per-join network call. |
-| `INTROSPECT` | First-party servers only. | Operator holds a live account credential; a backbone round trip per join. Warns loudly at startup. |
+| `INTROSPECT` | First-party servers only. | A backbone round trip per join. The client sends a single-use **join token**, never its access token; see below. Warns at startup. |
 | `LOCAL` | LAN, development. | Accounts in a JSON file. Password hashing is salted SHA-256 × 4096; see [security.md](security.md#two-things-that-are-weaker-than-they-look). |
 | `ANONYMOUS` | Open servers. | Nobody is authenticated; bans cannot mean anything. Warns. |
+
+### INTROSPECT never hands a server the access token
+
+Anything a client sends a game server reaches its operator, and the account access token works on every `/api/app/v1` route for an hour. So:
+
+- **Server:** with a `backbone`, it announces `join_audience` in the challenge (`DotAuthServer.join_audience()`: `DotAuthConfig.join_audience` if pinned, else the target `integration/v1/me` names) and resolves what arrives through `player/introspect`. The site maps `join_token_required` (an old client sent its access token) and `wrong_audience` to sentences. With no backbone a join token fails in words; `/me` is only the legacy path for old clients. A `ticket` is verified too when `ticket_public_key` is set.
+- **Client** (`DotClientLink._attach_introspect`): it mints a join token (`DotAuthClient.request_join_token`, `POST /api/app/v1/play/join-token`) only when the announced audience is in `DotAuthConfig.first_party_audiences`. Otherwise it sends a connect ticket if the build has an issuer, and if not it fails the join as `forbidden`. It never sends `valid_access_token()`.
+- A join token is `tmc_jt_`-prefixed, lives 60 s, is spent once, and only the credential its audience names can spend it. A server that lies about its audience gains nothing, so the first-party list is defence in depth, not the only guard.
+- **Compatibility:** the site refuses DEVICE tokens at introspect, so a client older than API level 5 cannot join an INTROSPECT server (`Your game needs an update`). A new client on a server that does not announce `join_audience` (older dot-server or dot-auth, or no backbone) falls back to a ticket or a refusal. Web builds' GAME tokens are still accepted at their own app's servers.
 
 `allow_guests` layers a guest fallback onto any strategy, and warns, because a banned player can always return as a different guest.
 

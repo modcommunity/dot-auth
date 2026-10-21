@@ -12,7 +12,9 @@ Verified against website-city's source. If these drift, dot-auth breaks here:
 | `POST /api/app/v1/auth/token` | `DeviceTokenRequest`, `TokenResponse` | `DotAuthClient._poll_for_token` |
 | `POST /api/app/v1/auth/refresh` | `RefreshRequest` | `DotAuthClient.refresh` |
 | `POST /api/app/v1/auth/revoke` | none | `DotAuthClient.sign_out` |
-| `GET /api/app/v1/me` | `SessionUserSchema` | issuer + `INTROSPECT` |
+| `GET /api/app/v1/me` | `SessionUserSchema` | issuer + legacy `INTROSPECT` without a backbone |
+| `POST /api/app/v1/play/join-token` | `{ audience }` → `{ token, audience, expiresIn }` | `DotAuthClient.request_join_token` |
+| `POST /api/integration/v1/player/introspect` | website-city `docs/api/integration-api.md` | `DotAuthServer` INTROSPECT with a backbone |
 | `POST /api/content/server/integration/stats` | `~/types/integration/server.ts` `IngestServerStatsInput` | `DotBackboneClient.report_stats` |
 | `POST /api/content/server/integration/users` | `IngestServerUsersInput` | `DotBackboneClient.report_users` |
 | `GET /api/integration/v1/user/lookup` | `IngestUserLookupInput` | `DotBackboneClient.lookup_user` |

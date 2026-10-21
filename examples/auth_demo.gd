@@ -35,7 +35,7 @@ const SECTIONS := 13
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 157
+const CHECKS := 165
 
 var _entered := 0
 var _completed := 0
@@ -256,6 +256,10 @@ class FakeBackbone extends DotBackboneClient:
 				"key": "Kq3_scopedKey-forThis1", "name": "Ada", "username": "ada"}})
 		if token == "other-app":
 			return DotResult.failure(DotError.from_http(403, "{\"code\":\"wrong_app\"}"))
+		if token == "device-token":
+			return DotResult.failure(DotError.from_http(403, "{\"code\":\"join_token_required\"}"))
+		if token == "tmc_jt_elsewhere":
+			return DotResult.failure(DotError.from_http(403, "{\"code\":\"wrong_audience\"}"))
 		return DotResult.failure(DotError.from_http(401, "{\"code\":\"token_expired\"}"))
 
 
@@ -297,8 +301,55 @@ func _test_scoped_introspect() -> void:
 	var bad := DotAuthIdentity.from_scoped_user({"key": "../x"})
 	_check("a key that is not a key is refused", not bad.ok, bad)
 
+	# Join tokens: what a current client sends instead of its access token.
+	var device: DotResult = await server.authenticate({"access_token": "device-token"}, "10.0.5.4")
+	_check("an old client's account token: told to update",
+		not device.ok and device.error.code == DotError.CODE_FORBIDDEN
+			and device.error.message.contains("update"), device)
+	var elsewhere: DotResult = await server.authenticate({"access_token": "tmc_jt_elsewhere"}, "10.0.5.5")
+	_check("a join token for another server is refused as such",
+		not elsewhere.ok and elsewhere.error.code == DotError.CODE_FORBIDDEN
+			and elsewhere.error.message.contains("different server"), elsewhere)
+
+	config.join_audience = "server:42"
+	_check("the audience it announces is the pinned one",
+		server.join_audience() == "server:42", null)
+	_check("an audience must name one target",
+		DotAuthConfig.is_audience("server:42") and DotAuthConfig.is_audience("app:7")
+			and not DotAuthConfig.is_audience("global")
+			and not DotAuthConfig.is_audience("server:0")
+			and not DotAuthConfig.is_audience("server:42x"), null)
+
 	server.queue_free()
 	fake.free()
+
+	# Without a backbone a join token cannot be resolved: say so, never "/me" it.
+	var bare := DotAuthServer.new()
+	var bare_config := DotAuthConfig.new()
+	bare_config.strategy = DotAuthConfig.Strategy.INTROSPECT
+	bare_config.backbone_url = "http://127.0.0.1:9"
+	bare_config.allow_guests = false
+	bare.config = bare_config
+	bare.config_file = ""
+	bare.register_service = false
+	add_child(bare)
+	bare.start()
+	var unresolvable: DotResult = await bare.authenticate({"access_token": "tmc_jt_x"}, "10.0.5.6")
+	_check("no backbone: a join token fails in words",
+		not unresolvable.ok and unresolvable.error.code == DotError.CODE_STATE, unresolvable)
+	bare.queue_free()
+
+	# The client half: nothing is minted for a server the build does not list.
+	var client_config := DotAuthConfig.new()
+	client_config.first_party_audiences = PackedStringArray(["server:42"])
+	var client := DotAuthClient.new()
+	client.config = client_config
+	_check("a listed server is first-party", client.is_first_party("server:42"), null)
+	_check("another is not", not client.is_first_party("server:43"), null)
+	var refused: DotResult = await client.request_join_token("server:43")
+	_check("and no join token is requested for it",
+		not refused.ok and refused.error.code == DotError.CODE_FORBIDDEN, refused)
+	client.free()
 	_done()
 
 

@@ -815,6 +815,46 @@ func request_ticket(issuer_url: String, server_id: String) -> DotResult:
 	return DotResult.success(ticket)
 
 
+# --- Join tokens ------------------------------------------------------------
+
+## Whether this client treats the server announcing [param audience] as first-party,
+## i.e. may join it under [constant DotAuthConfig.Strategy.INTROSPECT]. See
+## [member DotAuthConfig.first_party_audiences].
+func is_first_party(audience: String) -> bool:
+	return audience != "" and config.first_party_audiences.has(audience)
+
+
+## Mints a single-use join token for ONE server: what an INTROSPECT server is sent in
+## place of the access token, which never leaves this client.
+##
+## [param audience] is the server's integration target (`server:<id>`, `app:<id>`).
+## The token lives sixty seconds, is spent once, and only the credential that audience
+## names can spend it; every app API route refuses it. Refuses an audience that is not
+## in [member DotAuthConfig.first_party_audiences], so no caller can mint for a server
+## the build does not trust.
+func request_join_token(audience: String) -> DotResult:
+	if not is_first_party(audience):
+		return DotResult.fail(
+			DotError.CODE_FORBIDDEN,
+			"This server is not one this game signs in to directly.",
+			"audience %s is not in first_party_audiences" % audience
+		)
+
+	var res := await post_app("play/join-token", {"audience": audience})
+	if not res.ok:
+		return res
+
+	var d: Variant = res.value
+	var token := str((d as Dictionary).get("token", "")) if d is Dictionary else ""
+	if not token.begins_with("tmc_jt_"):
+		return DotResult.fail(
+			DotError.CODE_PARSE, "The backbone returned no join token."
+		)
+
+	DotLog.debug(CHANNEL, "join token issued", {"audience": audience})
+	return DotResult.success(token)
+
+
 ## Tells the issuer this player has left whatever server they were on.
 ##
 ## The polite half of [member DotAuthConfig.single_session]. The server they

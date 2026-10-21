@@ -76,7 +76,7 @@ The ticket is audience-scoped, short-lived, single-use and RSA-signed. A server 
 | | |
 | --- | --- |
 | `TICKET` | Public servers. The above. |
-| `INTROSPECT` | First-party servers only, where the operator holds a live account credential. Warns at startup. |
+| `INTROSPECT` | First-party servers only. The client sends a single-use join token, and only to audiences in `first_party_audiences` ([strategies](docs/strategies.md#introspect-never-hands-a-server-the-access-token)). Warns at startup. |
 | `LOCAL` | LAN and development. Accounts in a JSON file. |
 | `ANONYMOUS` | Everyone is a guest. Bans cannot mean anything. Warns. |
 

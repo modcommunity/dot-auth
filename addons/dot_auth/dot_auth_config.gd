@@ -16,12 +16,16 @@ enum Strategy {
 	## key: no network call per join, and the player's account token never
 	## reaches the game server. [b]The right choice for public servers.[/b]
 	TICKET,
-	## The client sends its backbone access token and the server calls
-	## [code]/api/app/v1/me[/code] to resolve it.
+	## The client sends a single-use JOIN TOKEN minted for this server, and the
+	## server redeems it at the backbone's `player/introspect` with its own
+	## integration credential (see [member DotAuthServer.backbone]).
 	##
-	## [b]Only for first-party servers.[/b] It hands the operator a live
-	## credential for the player's whole site account, and adds a backbone round
-	## trip to every join.
+	## [b]Only for first-party servers, and now enforced by the client.[/b] A client
+	## takes part only when this server's [member join_audience] is in its own
+	## [member first_party_audiences]; otherwise it offers a ticket or refuses to
+	## join, and it never sends its account access token. The backbone refuses a
+	## device access token here too, so an older client is told to update rather
+	## than leaking a credential. Adds a backbone round trip to every join.
 	INTROSPECT,
 	## Accounts defined in a file on the server. No backbone involved.
 	LOCAL,
@@ -52,6 +56,20 @@ enum Strategy {
 ## URL decides where a single-use sign-in code is redeemed, and a link that could point
 ## that at another host would be a credential-forwarding link.
 @export var backbone_url: String = "https://moddingcommunity.com"
+
+## The servers this client treats as FIRST-PARTY: the only ones it will join under
+## [constant Strategy.INTROSPECT].
+##
+## Each entry is a backbone integration target, `server:<id>` or `app:<id>` — the
+## [member join_audience] such a server announces in its handshake. The client mints a
+## single-use join token for exactly that audience (`POST /api/app/v1/play/join-token`)
+## and sends that, never its access token. A server that claims somebody else's
+## audience gains nothing: the token can only be redeemed by the credential the
+## audience names. Empty, the default, means no server is first-party, and an
+## INTROSPECT server gets a ticket (when an issuer is configured) or a refusal.
+##
+## A client-side setting the server cannot influence: ship it in the build's config.
+@export var first_party_audiences: PackedStringArray = PackedStringArray()
 
 ## Client name shown on the backbone's device-approval screen.
 ##
@@ -103,6 +121,15 @@ enum Strategy {
 ## [code]us-east-2[/code] — otherwise a ticket captured on one server is a login
 ## on every server, which is the whole thing tickets exist to prevent.
 @export var server_id: String = ""
+
+## The backbone audience this server announces for [constant Strategy.INTROSPECT]:
+## its integration credential's target, `server:<id>` or `app:<id>`.
+##
+## Leave empty to have [DotAuthServer] read it from `GET /api/integration/v1/me`
+## once [member DotAuthServer.backbone] is set. Set it to pin the value. A wrong value
+## is not a hole, only a broken join: the backbone refuses a join token minted for
+## another audience (`wrong_audience`).
+@export var join_audience: String = ""
 
 ## PEM public key of the ticket issuer, for [constant Strategy.TICKET].
 @export_multiline var ticket_public_key: String = ""
@@ -324,6 +351,21 @@ func validate() -> DotResult:
 					"LOCAL authentication needs local_accounts_path."
 				)
 
+	for entry in first_party_audiences:
+		if not is_audience(entry):
+			return DotResult.fail(
+				DotError.CODE_INVALID,
+				"first_party_audiences entries must look like server:<id> or app:<id>.",
+				"got %s" % entry
+			)
+
+	if join_audience != "" and not is_audience(join_audience):
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"join_audience must look like server:<id> or app:<id>.",
+			"got %s" % join_audience
+		)
+
 	if ticket_replay_memory_sec <= ticket_ttl_sec:
 		return DotResult.fail(
 			DotError.CODE_INVALID,
@@ -365,9 +407,9 @@ func warn_about_risky_settings() -> void:
 	if strategy == Strategy.INTROSPECT:
 		DotLog.warn(
 			"auth",
-			"INTROSPECT strategy: connecting players hand this server a live "
-			+ "credential for their whole site account. Only run this on servers "
-			+ "you operate.",
+			"INTROSPECT strategy: only clients that list this server in "
+			+ "first_party_audiences will join, each with a single-use join token. "
+			+ "Only run this on servers you operate.",
 			{"strategy": "INTROSPECT"}
 		)
 
@@ -385,6 +427,17 @@ func warn_about_risky_settings() -> void:
 			"allow_guests is on — a banned player can return as a guest",
 			{"setting": "allow_guests"}
 		)
+
+
+## Whether [param value] is a backbone integration target, `<kind>:<id>`.
+static func is_audience(value: String) -> bool:
+	var parts := value.split(":")
+	if parts.size() != 2 or parts[0] == "" or not parts[1].is_valid_int():
+		return false
+	for ch in parts[0]:
+		if not ((ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z")):
+			return false
+	return int(parts[1]) > 0 and not parts[1].begins_with("0")
 
 
 func device_endpoint() -> String:

@@ -35,6 +35,9 @@ const CHANNEL := "auth.server"
 ## Registry name dot-server looks for.
 const SERVICE := &"dot_auth_server"
 
+## What a join token starts with (website-city's `JOIN_TOKEN_PREFIX`).
+const JOIN_TOKEN_PREFIX := "tmc_jt_"
+
 signal authenticated(identity: DotAuthIdentity)
 signal rejected(reason: String, detail: String)
 
@@ -76,8 +79,19 @@ var session_reporter: DotAuthSessionReporter = null
 ## server's scope rather than their account id. That key is the only identifier the
 ## backbone's avatar, profile and stats routes resolve for this server, and it is one
 ## other operators cannot correlate. Unset, INTROSPECT reads `/api/app/v1/me` as it
-## always has, which answers with the account id and is for first-party servers only.
-var backbone: DotBackboneClient = null
+## always has, which answers with the account id and is for first-party servers only
+## (and fails for a current client, whose join token `/me` refuses).
+##
+## Setting it also learns [method join_audience] from `integration/v1/me` when
+## [member DotAuthConfig.join_audience] is not pinned.
+var backbone: DotBackboneClient = null:
+	set(value):
+		backbone = value
+		if value != null and config != null and config.join_audience == "":
+			_discover_join_audience.call_deferred()
+
+## The audience learnt from the backbone; see [method join_audience].
+var _discovered_audience: String = ""
 
 ## Refuse an INTROSPECT join while [member backbone] is unset, rather than falling back
 ## to `/me`.
@@ -545,13 +559,19 @@ func _authenticate_ticket(credential: Dictionary) -> DotResult:
 	return DotResult.success(identity)
 
 
-## Resolves a backbone access token by calling `/api/app/v1/me`.
+## Resolves what an INTROSPECT client sent.
 ##
-## First-party servers only — see the warning [DotAuthConfig] logs. Costs a
-## backbone round trip per join, and the operator ends up holding a live
-## credential for the player's site account.
+## With a [member backbone]: a single-use join token (or a legacy web build's GAME
+## token) through `player/introspect`, which yields a scoped key and leaves the
+## operator nothing to replay. Without one: `/api/app/v1/me`, first-party servers
+## only. A client that will not send a token here (this server is not on its
+## first-party list) sends a connect ticket instead, which is verified offline when
+## [member DotAuthConfig.ticket_public_key] is set.
 func _authenticate_introspect(credential: Dictionary) -> DotResult:
 	var token := str(credential.get("access_token", ""))
+	if token == "" and str(credential.get("ticket", "")) != "" \
+			and config.ticket_public_key != "":
+		return _authenticate_ticket(credential)
 	if token == "":
 		return DotResult.fail(
 			DotError.CODE_AUTH, "This server requires you to be signed in."
@@ -559,6 +579,15 @@ func _authenticate_introspect(credential: Dictionary) -> DotResult:
 
 	if backbone != null:
 		return await _authenticate_introspect_scoped(token, credential)
+
+	# A current client sends a join token, which only `player/introspect` accepts —
+	# the `/me` fallback below cannot resolve it, so say why instead of "not valid".
+	if token.begins_with(JOIN_TOKEN_PREFIX):
+		return DotResult.fail(
+			DotError.CODE_STATE,
+			"This server cannot verify sign-ins yet. Try again in a moment.",
+			"a join token needs the server's integration credential (backbone is unset)"
+		)
 
 	if scoped_only:
 		return DotResult.fail(
@@ -621,6 +650,21 @@ func _authenticate_introspect_scoped(token: String, credential: Dictionary) -> D
 				DotError.CODE_AUTH, "Your sign-in is no longer valid."
 			)
 		if res.error != null and res.error.http_status == 403:
+			var code := _backbone_code(res)
+			if code == "join_token_required":
+				# An older client sent its account access token, which the backbone no
+				# longer takes from a game server. Nothing to fix here but the client.
+				return DotResult.fail(
+					DotError.CODE_FORBIDDEN,
+					"Your game needs an update to join this server.",
+					"join_token_required"
+				)
+			if code == "wrong_audience":
+				return DotResult.fail(
+					DotError.CODE_FORBIDDEN,
+					"That sign-in was issued for a different server.",
+					"wrong_audience: check DotAuthConfig.join_audience"
+				)
 			return DotResult.fail(
 				DotError.CODE_FORBIDDEN, "That sign-in cannot be used on this server."
 			)
@@ -842,6 +886,64 @@ func _sweep_spent() -> void:
 
 
 # --- Reporting -------------------------------------------------------------
+
+## The backbone audience this server announces in its handshake, `server:<id>` or
+## `app:<id>`, or [code]""[/code] when it is not known yet.
+##
+## [member DotAuthConfig.join_audience] when pinned, else what `integration/v1/me`
+## said about [member backbone]'s credential. A client mints its join token for this
+## value and only for a server it lists as first-party; see
+## [member DotAuthConfig.first_party_audiences].
+func join_audience() -> String:
+	if config != null and config.join_audience != "":
+		return config.join_audience
+	return _discovered_audience
+
+
+func _discover_join_audience() -> void:
+	if backbone == null or not backbone.has_method("get_integration"):
+		return
+	var res: DotResult = await backbone.get_integration("me")
+	# The backbone is usually assigned before it starts; wait for it a while.
+	var tries := 0
+	while not res.ok and res.error != null and res.error.code == DotError.CODE_STATE \
+			and tries < 20 and is_inside_tree() and backbone != null:
+		tries += 1
+		await get_tree().create_timer(0.5).timeout
+		if backbone == null:
+			return
+		res = await backbone.get_integration("me")
+	if not res.ok or not (res.value is Dictionary):
+		DotLog.warn(CHANNEL, "could not learn this server's join audience", {
+			"why": res.error.message if res.error != null else "unexpected reply",
+		})
+		return
+	var target: Variant = (res.value as Dictionary).get("target")
+	if not (target is Dictionary):
+		return
+	var audience := "%s:%s" % [
+		str((target as Dictionary).get("kind", "")),
+		str(int(_number_of(target, "id"))),
+	]
+	if DotAuthConfig.is_audience(audience):
+		_discovered_audience = audience
+		DotLog.info(CHANNEL, "join audience", {"audience": audience})
+
+
+static func _number_of(d: Dictionary, key: String) -> float:
+	var v: Variant = d.get(key, 0)
+	return float(v) if (v is int or v is float) else 0.0
+
+
+## The backbone's `code` from a failed integration call's JSON body, or "".
+static func _backbone_code(res: DotResult) -> String:
+	if res.error == null or res.error.detail == "":
+		return ""
+	var parsed: Variant = JSON.parse_string(res.error.detail)
+	if parsed is Dictionary:
+		return str((parsed as Dictionary).get("code", ""))
+	return ""
+
 
 func strategy_name() -> String:
 	if config == null:

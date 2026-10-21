@@ -44,7 +44,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) and [docs/backbone.md](../../docs/b
 
 **Tickets and sessions**
 
-- A server never receives a player's backbone token on a public server: `TICKET` is for public servers, `INTROSPECT` for first-party only. A client sends only the credential asked for. [tickets](docs/tickets.md#the-central-design-problem-and-the-answer)
+- A server never receives a player's backbone token on a public server: `TICKET` is for public servers, `INTROSPECT` for first-party only, and even then the client sends a single-use join token minted for the announced audience, never `valid_access_token()`. A client sends only the credential asked for. [strategies](docs/strategies.md#introspect-never-hands-a-server-the-access-token) [tickets](docs/tickets.md#the-central-design-problem-and-the-answer)
 - A ticket is audience-scoped, minutes long, single-use and RS256. `validate()` refuses `TICKET` without `server_id` and replay memory not longer than the ticket's life. [tickets](docs/tickets.md#the-central-design-problem-and-the-answer)
 - `single_session` lives on the issuer; rosters are absolute; an unconfirmed session is never ended by a roster; `session_lease_sec >= ticket_ttl_sec`; server keys are per server. [tickets](docs/tickets.md#one-seat-per-account)
 - `DotAuthServer` builds the `DotAuthSessionReporter` when `session_report_url` is set and follows the registry's `dot_server`; the roster is every signed-on session, not only those in play. [tickets](docs/tickets.md#who-builds-the-reporter-and-which-stops-it-reports)

@@ -13,5 +13,8 @@ extends RefCounted
 # 3: DotAuthClient.SERVICE (the client registers itself as `dot_auth_client`, which is
 #    the name DotClientLink looks up to attach a sign-in) and DotAuthClient.account_key().
 # 4: DotAuthClient.redeem_handoff(code), the launcher's sign-in code on any platform.
-const LEVEL := 4
+# 5: DotAuthClient.request_join_token(audience) and is_first_party(audience);
+#    DotAuthConfig.first_party_audiences, join_audience and is_audience();
+#    DotAuthServer.join_audience(). INTROSPECT now carries a join token, never an access token.
+const LEVEL := 5
 const OLDEST := 1
