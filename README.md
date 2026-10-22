@@ -58,7 +58,7 @@ var identity: DotAuthIdentity = res.value
 
 Verification is offline, with no backbone round trip per join.
 
-An operator's yml lives in `cfg/addons/dot_auth/auth.yml` with `cfg/server/addons/dot_auth/` over it: `DotAuthConfig.new().load_cfg()` reads both, then `DOT_AUTH_*` and `--auth-*`. A flat `cfg/auth.yml` is still read with one WARN until 2026-12-31. Secrets (`issuer_private_key`, `integration_token`, `session_report_key`) are read from a file only, never from the environment or command line.
+The addon's defaults live in `cfg/addons/dot_auth/auth.yml`, a game overrides them in `cfg/game/<game>/dot_auth/` and the operator in `cfg/server/addons/dot_auth/` or `cfg/server/game/<game>/dot_auth/` (strongest; see [dot-core's addon-config.md](https://github.com/modcommunity/dot-core/blob/main/docs/addon-config.md)): `DotAuthConfig.new().load_cfg()` reads both, then `DOT_AUTH_*` and `--auth-*`. A flat `cfg/auth.yml` is still read with one WARN until 2026-12-31. Secrets (`issuer_private_key`, `integration_token`, `session_report_key`) are read from a file only, never from the environment or command line.
 
 ## Why tickets
 
