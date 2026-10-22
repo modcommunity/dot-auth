@@ -22,7 +22,7 @@ func _ready() -> void:
 func _run() -> void:
 	print("dot-auth cfg self-test")
 	var addon_dir := "user://cfg/addons/" + FOLDER
-	var server_dir := "user://cfg/server/" + FOLDER
+	var server_dir := "user://cfg/server/addons/" + FOLDER
 	_clean(addon_dir, server_dir)
 	DotCfgLegacy.reset()
 
@@ -50,6 +50,15 @@ func _run() -> void:
 	config.load_cfg(FILE, LEGACY)
 	_check(config.integration_token == "", "and the environment cannot set one")
 	OS.unset_environment("DOT_AUTH_INTEGRATION_TOKEN")
+
+	_clean(addon_dir, server_dir)
+	DotCfgLegacy.reset()
+	_write("user://cfg/server/" + FOLDER + "/" + FILE, "strategy: 1\nrefresh_margin_sec: 400.0\n")
+	config = DotAuthConfig.new()
+	res = config.load_cfg(FILE, LEGACY)
+	_check(res.ok and config.refresh_margin_sec == 400.0, "the old cfg/server/dot_auth/ still loads")
+	_check(DotCfgLegacy.warned_count() == 1, "and warns once")
+	DotPaths.remove_tree("user://cfg/server/" + FOLDER)
 
 	_clean(addon_dir, server_dir)
 	DotCfgLegacy.reset()

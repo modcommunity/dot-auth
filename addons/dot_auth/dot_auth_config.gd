@@ -325,7 +325,7 @@ func sensitive_keys() -> PackedStringArray:
 const CFG_ADDON := "dot-auth"
 
 
-## Applies [param file_name] from `cfg/addons/dot_auth/`, then the operator's `cfg/server/dot_auth/`.
+## Applies [param file_name] from `cfg/addons/dot_auth/`, then the operator's `cfg/server/addons/dot_auth/`.
 ## A flat [param legacy_dir]/[param file_name] is still read (one WARN) while no new copy exists.
 ## Secrets stay file-only: the environment and command line still refuse them.
 func apply_cfg_file(file_name: String = "auth.yml", legacy_dir: String = "res://cfg") -> DotResult:

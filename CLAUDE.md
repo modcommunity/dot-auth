@@ -31,7 +31,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) and [docs/backbone.md](../../docs/b
 | `addons/dot_auth/bridge/` | `DotAuthAdminSource`: site groups to server permission flags, duck-typed for dot-server |
 | `addons/dot_auth/dot_auth_api.gd` | the API level (`LEVEL`, `OLDEST`); the bump rule is on `DotAddonApi` |
 | `examples/auth_demo.tscn` | the suite, offline (binds `127.0.0.1:18787` for the issuer's listener; skips those checks with a line if the port is taken) |
-| `examples/cfg_selftest.tscn` | `auth.yml` from `cfg/addons/dot_auth/`, `cfg/server/dot_auth/` over it, the flat `cfg/auth.yml` shim (WARN once, removed 2026-12-31); secrets stay file-only |
+| `examples/cfg_selftest.tscn` | `auth.yml` from `cfg/addons/dot_auth/`, `cfg/server/addons/dot_auth/` over it, the flat `cfg/auth.yml` shim (WARN once, removed 2026-12-31); secrets stay file-only |
 | `examples/session_reporter_selftest.tscn` | a stopping `DotServer` frees its players' seats on its report; needs dot-server linked (`ln -s ../../dot-server/addons/dot_server addons/dot_server`, gitignored); binds `127.0.0.1:18795`-`18799` |
 | `examples/issuer.tscn` | the issuer as a daemon; never exits, so no smoke test covers it |
 
