@@ -321,6 +321,50 @@ func sensitive_keys() -> PackedStringArray:
 	])
 
 
+## The addon name [DotAddonConfig] turns into the folder `dot_auth`.
+const CFG_ADDON := "dot-auth"
+
+
+## Applies [param file_name] from `cfg/addons/dot_auth/`, then the operator's `cfg/server/dot_auth/`.
+## A flat [param legacy_dir]/[param file_name] is still read (one WARN) while no new copy exists.
+## Secrets stay file-only: the environment and command line still refuse them.
+func apply_cfg_file(file_name: String = "auth.yml", legacy_dir: String = "res://cfg") -> DotResult:
+	var layers := DotAddonConfig.file_layers(CFG_ADDON, file_name)
+	var newest := (
+		layers[layers.size() - 1] if not layers.is_empty()
+		else DotAddonConfig.write_dir_for(CFG_ADDON).path_join(file_name)
+	)
+	var old_path := legacy_dir.path_join(file_name) if legacy_dir != "" else ""
+	if old_path != "" and DotCfgLegacy.find(old_path, newest) == old_path:
+		layers = PackedStringArray([old_path])
+
+	var applied := PackedStringArray()
+	for path in layers:
+		var parsed := DotYaml.parse_file(path)
+		if not parsed.ok:
+			return parsed.wrap("Could not read '%s'." % path)
+		if parsed.value == null:
+			continue
+		if not (parsed.value is Dictionary):
+			return DotResult.fail(DotError.CODE_PARSE, "'%s' must hold a mapping at the top level." % path)
+		applied.append_array(apply_dictionary(parsed.value as Dictionary, path))
+	return DotResult.success(applied)
+
+
+## [method apply_cfg_file], then `DOT_AUTH_*`, `--auth-*` and validation: [method DotConfig.load_layered] for the yml layout.
+func load_cfg(file_name: String = "auth.yml", legacy_dir: String = "res://cfg") -> DotResult:
+	unknown_keys = PackedStringArray()
+	var file_res := apply_cfg_file(file_name, legacy_dir)
+	if not file_res.ok:
+		return file_res
+	apply_env()
+	apply_cli()
+	var valid := validate()
+	if not valid.ok:
+		return valid.wrap("Configuration is invalid.")
+	return DotResult.success(self)
+
+
 func validate() -> DotResult:
 	match strategy:
 		Strategy.TICKET:
