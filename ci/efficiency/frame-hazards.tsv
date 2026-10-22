@@ -1,0 +1,5 @@
+# frame-hazards
+# Baselines only shrink: scripts/<gate> --update lowers or drops entries and refuses to add.
+addons/dot_auth/server/dot_auth_issuer.gd::_header::string_build	1
+addons/dot_auth/server/dot_auth_issuer.gd::_process::alloc_array	1
+addons/dot_auth/server/dot_auth_issuer.gd::_respond::string_build	5
