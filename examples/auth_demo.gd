@@ -30,12 +30,12 @@ const SERVER_B := "us-east-2"
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 13
+const SECTIONS := 14
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 165
+const CHECKS := 168
 
 var _entered := 0
 var _completed := 0
@@ -72,6 +72,7 @@ func _run() -> void:
 	await _test_backbone_registry()
 	_test_app_refusal()
 	await _test_scoped_introspect()
+	await _test_audience_discovery()
 	await _test_launcher_handoff()
 
 	_line("")
@@ -261,6 +262,70 @@ class FakeBackbone extends DotBackboneClient:
 		if token == "tmc_jt_elsewhere":
 			return DotResult.failure(DotError.from_http(403, "{\"code\":\"wrong_audience\"}"))
 		return DotResult.failure(DotError.from_http(401, "{\"code\":\"token_expired\"}"))
+
+
+## Answers `integration/v1/me` only after [member fail_first] failures.
+class FlakyMeBackbone extends DotBackboneClient:
+	var fail_first := 2
+	var target: Variant = {"kind": "server", "id": 3550523}
+	var calls := 0
+
+	func get_integration(_path: String, _query: Dictionary = {}) -> DotResult:
+		calls += 1
+		if calls <= fail_first:
+			return DotResult.failure(DotError.from_http(429, "{\"code\":\"rate_limited\"}"))
+		return DotResult.success({"ok": true, "target": target})
+
+
+func _test_audience_discovery() -> void:
+	_line("")
+	_section("[b]join audience discovery[/b]")
+
+	var flaky := FlakyMeBackbone.new()
+	var server := _discovery_server(flaky)
+	for i in 60:
+		if server.join_audience() != "":
+			break
+		await get_tree().create_timer(0.1).timeout
+	_check("a failed integration/v1/me is retried until it answers",
+		server.join_audience() == "server:3550523" and flaky.calls == 3, null)
+	server.queue_free()
+	flaky.free()
+
+	var bad := FlakyMeBackbone.new()
+	bad.fail_first = 0
+	bad.target = {"kind": "", "id": 0}
+	server = _discovery_server(bad)
+	for i in 10:
+		await get_tree().process_frame
+	_check("a reply naming no target announces nothing",
+		server.join_audience() == "" and bad.calls == 1, null)
+	server.queue_free()
+	bad.free()
+
+	var down := FlakyMeBackbone.new()
+	down.fail_first = 1000
+	server = _discovery_server(down)
+	server.discover_audience_tries = 2
+	await get_tree().create_timer(2.0).timeout
+	_check("a backbone that never answers gives up after the bound",
+		server.join_audience() == "" and down.calls == 3, null)
+	server.queue_free()
+	down.free()
+	_done()
+
+
+func _discovery_server(backbone: DotBackboneClient) -> DotAuthServer:
+	var config := DotAuthConfig.new()
+	config.strategy = DotAuthConfig.Strategy.INTROSPECT
+	config.backbone_url = "http://127.0.0.1:9"
+	var server := DotAuthServer.new()
+	server.config = config
+	server.config_file = ""
+	server.register_service = false
+	add_child(server)
+	server.backbone = backbone
+	return server
 
 
 func _test_scoped_introspect() -> void:

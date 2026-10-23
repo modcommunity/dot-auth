@@ -93,6 +93,10 @@ var backbone: DotBackboneClient = null:
 ## The audience learnt from the backbone; see [method join_audience].
 var _discovered_audience: String = ""
 
+## How many failed `integration/v1/me` reads [method join_audience] discovery retries,
+## with backoff capped at 30 s (the default is about an hour).
+var discover_audience_tries: int = 130
+
 ## Refuse an INTROSPECT join while [member backbone] is unset, rather than falling back
 ## to `/me`.
 ##
@@ -903,31 +907,41 @@ func join_audience() -> String:
 func _discover_join_audience() -> void:
 	if backbone == null or not backbone.has_method("get_integration"):
 		return
-	var res: DotResult = await backbone.get_integration("me")
-	# The backbone is usually assigned before it starts; wait for it a while.
+	var asked_of := backbone
+	var res: DotResult = await asked_of.get_integration("me")
+	# Any failure retries with backoff: a boot-time 429 or network blip that gave up
+	# left the server announcing nothing, and every first-party client refused it.
 	var tries := 0
-	while not res.ok and res.error != null and res.error.code == DotError.CODE_STATE \
-			and tries < 20 and is_inside_tree() and backbone != null:
+	var delay := 0.5
+	while not (res.ok and res.value is Dictionary):
+		if tries == 4:
+			DotLog.warn(CHANNEL, "could not learn this server's join audience yet; still trying", {
+				"why": res.error.message if res.error != null else "unexpected reply",
+			})
 		tries += 1
-		await get_tree().create_timer(0.5).timeout
-		if backbone == null:
+		if tries > discover_audience_tries or not is_inside_tree():
+			DotLog.warn(CHANNEL, "gave up learning this server's join audience", {
+				"why": res.error.message if res.error != null else "unexpected reply",
+				"fix": "pin join_audience in auth.yml",
+			})
 			return
-		res = await backbone.get_integration("me")
-	if not res.ok or not (res.value is Dictionary):
-		DotLog.warn(CHANNEL, "could not learn this server's join audience", {
-			"why": res.error.message if res.error != null else "unexpected reply",
-		})
-		return
+		await get_tree().create_timer(delay).timeout
+		delay = minf(delay * 2.0, 30.0)
+		if backbone != asked_of or _discovered_audience != "":
+			return
+		res = await asked_of.get_integration("me")
 	var target: Variant = (res.value as Dictionary).get("target")
-	if not (target is Dictionary):
+	var audience := ""
+	if target is Dictionary:
+		audience = "%s:%s" % [
+			str((target as Dictionary).get("kind", "")),
+			str(int(_number_of(target, "id"))),
+		]
+	if not DotAuthConfig.is_audience(audience):
+		DotLog.warn(CHANNEL, "integration/v1/me named no join audience", {"target": str(target)})
 		return
-	var audience := "%s:%s" % [
-		str((target as Dictionary).get("kind", "")),
-		str(int(_number_of(target, "id"))),
-	]
-	if DotAuthConfig.is_audience(audience):
-		_discovered_audience = audience
-		DotLog.info(CHANNEL, "join audience", {"audience": audience})
+	_discovered_audience = audience
+	DotLog.info(CHANNEL, "join audience", {"audience": audience})
 
 
 static func _number_of(d: Dictionary, key: String) -> float:
