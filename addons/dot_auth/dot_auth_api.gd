@@ -22,5 +22,9 @@ extends RefCounted
 # 7: connect tickets by dialled address: DotAuthClient.request_ticket_for_address();
 #    DotAuthServer.adopt_ticket_trust(), ticket_trust_ready() and ticket_key_wanted (key
 #    rotation by kid); DotAuthConfig.adopt_ticket_trust, ticket_public_keys, ticket_issuer_url.
-const LEVEL := 7
+# 8: tickets bound to a connection: authenticate(credential, rate_key, connection_nonce),
+#    request_ticket_for_address(address, issuer_url, nonce), DotAuthTicket.issue(..., nonce),
+#    DotAuthConfig.require_ticket_binding and ticket_replay_max; revoke_ticket_keys(). A
+#    ticket with no jti is refused; the site's revoked kids and refreshSec are honoured.
+const LEVEL := 8
 const OLDEST := 1

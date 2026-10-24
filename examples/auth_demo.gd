@@ -8,6 +8,8 @@ extends Control
 ## - ticket minting and offline verification;
 ## - audience scoping — a ticket for server A refused by server B;
 ## - replay refusal — the same ticket presented twice;
+## - connection binding — a copied ticket refused on another connection;
+## - issuer key rotation overlap and revocation;
 ## - expiry, and clock-skew leeway;
 ## - tamper detection on the payload;
 ## - algorithm confusion — an HS256 token offered where RS256 is expected;
@@ -35,7 +37,7 @@ const SECTIONS := 15
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 189
+const CHECKS := 204
 
 var _entered := 0
 var _completed := 0
@@ -258,13 +260,14 @@ func _test_ticket_trust(keys: Dictionary) -> void:
 	var id := "3550523"
 	var ada: DotAuthIdentity = DotAuthIdentity.from_scoped_user(
 		{"key": "Kq3_scopedKey-forThis1", "name": "Ada", "username": "ada"}).value
-	var mint := func(aud: String, pem: String, kid: String) -> String:
-		return str(DotAuthTicket.issue(ada, aud, pem, "tmc-site", 120, kid).value)
+	var mint := func(aud: String, pem: String, kid: String, nonce: String = "") -> String:
+		return str(DotAuthTicket.issue(ada, aud, pem, "tmc-site", 120, kid, nonce).value)
+	var phase := {"extra": [], "revoked": [], "refresh": 900}
 
 	var tcp := TCPServer.new()
 	if tcp.listen(0, "127.0.0.1") != OK:
 		_line("  (no loopback port; skipped)")
-		_passed += 21
+		_passed += 36
 		_done()
 		return
 	var seen: Array[Dictionary] = []
@@ -299,7 +302,7 @@ func _test_ticket_trust(keys: Dictionary) -> void:
 					{"kid": "k1", "alg": "RS256", "pem": str(keys["public"])},
 					{"kid": "hs", "alg": "HS256", "pem": str(keys["public"])},
 					{"kid": "bad", "alg": "RS256", "pem": str(keys["private"])},
-				]}}
+				] + phase["extra"], "revoked": phase["revoked"], "refreshSec": phase["refresh"]}}
 			elif head.begins_with("POST /api/app/v1/auth/ticket ") and body is Dictionary \
 					and str(body.get("address", "")) == "play.example.com:6005":
 				status = 200
@@ -364,6 +367,33 @@ func _test_ticket_trust(keys: Dictionary) -> void:
 	var forged := await server.authenticate({"ticket": mint.call(id, str(other["private"]), "k1")}, "p7")
 	_check("a known kid with the wrong key is refused", not forged.ok and forged.code() == DotError.CODE_INTEGRITY, forged)
 
+	var conn_a := "nonce-of-connection-A1"
+	var bound: String = mint.call(id, str(keys["private"]), "k1", conn_a)
+	var stolen := await server.authenticate({"ticket": bound}, "p8", "nonce-of-connection-B2")
+	_check("a copied bound ticket is refused on another connection",
+		not stolen.ok and stolen.code() == DotError.CODE_FORBIDDEN, stolen)
+	var spoof := await server.authenticate({"ticket": bound, DotAuthServer.CONNECTION_NONCE_KEY: conn_a}, "p9")
+	_check("and a client cannot supply the nonce itself",
+		not spoof.ok and spoof.code() == DotError.CODE_FORBIDDEN, spoof)
+	var owner := await server.authenticate({"ticket": bound}, "p10", conn_a)
+	_check("the connection it was issued for signs in", owner.ok, owner)
+	var replay := await server.authenticate({"ticket": bound}, "p11", conn_a)
+	_check("once", not replay.ok and replay.code() == DotError.CODE_FORBIDDEN, replay)
+	config.require_ticket_binding = true
+	var unbound := await server.authenticate({"ticket": mint.call(id, str(keys["private"]), "k1")}, "p12", conn_a)
+	_check("require_ticket_binding refuses an unbound ticket",
+		not unbound.ok and unbound.code() == DotError.CODE_FORBIDDEN, unbound)
+	config.require_ticket_binding = false
+	var bare := DotJwt.base_claims("tmc-site", ada.uid, id, 120)
+	bare.erase("jti")
+	var nojti := await server.authenticate({"ticket": str(DotJwt.encode_rs256(bare, str(keys["private"]), "k1").value)}, "p13")
+	_check("a ticket with no jti is refused", not nojti.ok and nojti.code() == DotError.CODE_INVALID, nojti)
+	config.ticket_replay_max = server._spent_tickets.size()
+	var full := await server.authenticate({"ticket": mint.call(id, str(keys["private"]), "k1")}, "p14")
+	_check("a full replay memory refuses, never forgets",
+		not full.ok and full.code() == DotError.CODE_RATE_LIMITED, full)
+	config.ticket_replay_max = 100000
+
 	var priv := server.adopt_ticket_trust("", {"x": str(keys["private"])})
 	_check("a private key is never adopted", not priv.ok and not config.ticket_public_keys.has("x"), priv)
 	_check("plain HTTP to a remote backbone is refused",
@@ -387,6 +417,38 @@ func _test_ticket_trust(keys: Dictionary) -> void:
 	second.adopt_ticket_trust(id, {})
 	_check("over the site's too", reloaded.server_id == "777", null)
 
+	phase["extra"] = [{"kid": "k2", "alg": "RS256", "pem": str(other["public"])}]
+	phase["refresh"] = 600
+	var overlap := await server.refresh_ticket_keys(true)
+	_check("rotation: the next key is adopted beside the old",
+		overlap.ok and config.ticket_public_keys.has("k1") and config.ticket_public_keys.has("k2"), overlap)
+	var by_old := await server.authenticate({"ticket": mint.call(id, str(keys["private"]), "k1")}, "p20")
+	var by_new := await server.authenticate({"ticket": mint.call(id, str(other["private"]), "k2")}, "p21")
+	_check("and both keys' tickets verify in the overlap", by_old.ok and by_new.ok, by_new if by_old.ok else by_old)
+	_check("the site's refreshSec sets the refetch", is_equal_approx(server._keys_refresh_sec, 600.0), null)
+	phase["revoked"] = ["k1"]
+	var revoking := await server.refresh_ticket_keys(true)
+	_check("revocation drops the revoked kid",
+		revoking.ok and not config.ticket_public_keys.has("k1") and config.ticket_public_keys.has("k2"), revoking)
+	var by_revoked := await server.authenticate({"ticket": mint.call(id, str(keys["private"]), "k1")}, "p22")
+	_check("and refuses its tickets", not by_revoked.ok and by_revoked.code() == DotError.CODE_FORBIDDEN, by_revoked)
+	server.adopt_ticket_trust("", {"k1": str(keys["public"])})
+	_check("and never adopts it again", not config.ticket_public_keys.has("k1"), null)
+	var third_cfg := DotAuthConfig.new()
+	third_cfg.strategy = DotAuthConfig.Strategy.TICKET
+	third_cfg.adopt_ticket_trust = true
+	third_cfg.backbone_url = stub
+	third_cfg.ticket_trust_cache = cache
+	var third := DotAuthServer.new()
+	third.config = third_cfg
+	third.config_file = ""
+	third.register_service = false
+	add_child(third)
+	third.start()
+	third.adopt_ticket_trust("", {"k1": str(keys["public"])})
+	_check("a restart remembers the revocation",
+		not third_cfg.ticket_public_keys.has("k1") and third_cfg.ticket_public_keys.has("k2"), null)
+
 	var client := DotAuthClient.new()
 	client.auto_sign_in = false
 	client.config_file = ""
@@ -397,6 +459,9 @@ func _test_ticket_trust(keys: Dictionary) -> void:
 	client.store.set_tokens("player-access", "player-refresh", 900)
 	var asked := await client.request_ticket_for_address("play.example.com:6005")
 	_check("a client asks by the address it dialled", asked.ok and asked.value == "t-for-6005", asked)
+	var with_nonce := await client.request_ticket_for_address("play.example.com:6005", "", conn_a)
+	_check("and passes the server's challenge nonce", with_nonce.ok
+		and (seen[-1]["body"] as Dictionary).get("nonce", "") == conn_a, with_nonce)
 	var unknown := await client.request_ticket_for_address("other.example.com:6005")
 	_check("an unlisted address keeps the site's code",
 		not unknown.ok and unknown.error.detail == "unknown_address", unknown)
@@ -406,6 +471,7 @@ func _test_ticket_trust(keys: Dictionary) -> void:
 	client.queue_free()
 	server.queue_free()
 	second.queue_free()
+	third.queue_free()
 	me.free()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(cache))
 	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://auth_demo_trust_tokens.dat"))

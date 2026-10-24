@@ -819,10 +819,16 @@ func request_ticket(issuer_url: String, server_id: String) -> DotResult:
 ## client dialled ([code]host:port[/code]), never one a server announced: a hostile
 ## server naming another's id would get a ticket valid there. [param issuer_url]
 ## defaults to [member DotAuthConfig.ticket_issuer_url]; empty means the backbone's
-## own issuer. Returns the ticket.
-func request_ticket_for_address(address: String, issuer_url: String = "") -> DotResult:
+## own issuer. [param nonce] is the server's challenge nonce for this connection, which
+## binds the ticket to it so a copy is useless elsewhere. Returns the ticket.
+func request_ticket_for_address(
+	address: String, issuer_url: String = "", nonce: String = ""
+) -> DotResult:
 	if address.strip_edges() == "":
 		return DotResult.fail(DotError.CODE_INVALID, "No server address to ask a ticket for.")
+	var body := {"address": address}
+	if nonce != "":
+		body["nonce"] = nonce
 	var issuer := issuer_url if issuer_url != "" else config.ticket_issuer_url
 	var res: DotResult
 	if issuer == "":
@@ -830,7 +836,7 @@ func request_ticket_for_address(address: String, issuer_url: String = "") -> Dot
 			return DotResult.fail(
 				DotError.CODE_STATE, "This game has no sign-in service configured."
 			)
-		res = await post_app("auth/ticket", {"address": address})
+		res = await post_app("auth/ticket", body)
 		if not res.ok:
 			return res
 	else:
@@ -839,7 +845,7 @@ func request_ticket_for_address(address: String, issuer_url: String = "") -> Dot
 			return token
 		res = await _http.post_json(
 			issuer.trim_suffix("/") + "/ticket",
-			{"address": address},
+			body,
 			{"Authorization": "Bearer %s" % token.value}
 		)
 		if not res.ok:

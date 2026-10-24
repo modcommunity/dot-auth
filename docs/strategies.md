@@ -75,4 +75,4 @@ dot-auth and dot-server do not import each other; either works alone. `DotAuthSe
 - **OAuth authorization-code flow.** The device flow covers desktop, mobile, console and browser with one implementation and never asks a player to type credentials into a game client. A browser build could use a redirect flow for a smoother experience.
 - **Platform SSO.** The backbone has a platform provider already; linking it would mean a platform id in `identity.claims` and a provider abstraction here.
 - **Ed25519.** Godot's `Crypto` has no EdDSA. The backbone's own API JWTs use it, which is one more reason the issuer indirection exists.
-- **Token binding to a connection.** A ticket proves identity at join time. Binding it to the transport session would need transport cooperation.
+- **Token binding to the transport.** A ticket proves identity at join time and is bound to the connection's challenge nonce ([tickets](tickets.md#the-backbones-own-issuer-by-dialled-address)), but not to the transport's keys: an active man-in-the-middle on an unencrypted transport can still take the connection over after sign-in. Use `wss://` for that.

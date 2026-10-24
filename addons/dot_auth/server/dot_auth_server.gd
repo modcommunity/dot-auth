@@ -99,13 +99,15 @@ var _discovered_audience: String = ""
 
 ## How often adopted issuer keys are refetched, and the least time between two fetches
 ## an unknown `kid` may cause.
-const TICKET_KEYS_REFRESH_SEC := 6 * 3600.0
+const TICKET_KEYS_REFRESH_SEC := 900.0
 const TICKET_KEYS_MIN_GAP_MSEC := 60_000
 
 ## "config" when auth.yml named the server id (it then wins over the site's).
 var _server_id_source := ""
 var _keys_fetched_msec := -TICKET_KEYS_MIN_GAP_MSEC
 var _keys_fetching := false
+## The site's `refreshSec`, clamped, so a revocation reaches this server in time.
+var _keys_refresh_sec := TICKET_KEYS_REFRESH_SEC
 
 ## How many failed `integration/v1/me` reads [method join_audience] discovery retries,
 ## with backoff capped at 30 s (the default is about an hour).
@@ -128,6 +130,12 @@ var _accounts: Dictionary = {}
 
 ## Spent ticket ids: jti -> expiry unix seconds.
 var _spent_tickets: Dictionary = {}
+
+## Key ids the issuer revoked: never trusted again, kept in the trust cache.
+var _revoked_kids: Dictionary = {}
+
+## Where [method authenticate] carries the host's connection nonce to the ticket check.
+const CONNECTION_NONCE_KEY := "_connection_nonce"
 var _last_sweep: int = 0
 
 var _started: bool = false
@@ -278,7 +286,7 @@ func start() -> DotResult:
 		refresh_ticket_keys.call_deferred()
 		var t := Timer.new()
 		t.name = "TicketKeysRefresh"
-		t.wait_time = TICKET_KEYS_REFRESH_SEC
+		t.wait_time = _keys_refresh_sec
 		t.autostart = true
 		t.timeout.connect(func() -> void: refresh_ticket_keys(true))
 		add_child(t)
@@ -351,15 +359,23 @@ func _on_service_registered(service: StringName, instance: Object) -> void:
 ## [code]ticket[/code], [code]access_token[/code], [code]username[/code] /
 ## [code]password[/code], [code]device_id[/code], [code]name[/code].
 ## [param rate_key] scopes the attempt limit — pass the peer's address so one
-## client cannot exhaust another's budget.
+## client cannot exhaust another's budget. [param connection_nonce] is the nonce the
+## host put in THIS connection's challenge; a ticket bound to another is refused.
 func authenticate(
 	credential: Dictionary,
-	rate_key: Variant = null
+	rate_key: Variant = null,
+	connection_nonce: String = ""
 ) -> DotResult:
 	if not _started:
 		var s := start()
 		if not s.ok:
 			return s
+
+	# The nonce must come from the host, never from what the client sent.
+	credential = credential.duplicate()
+	credential.erase(CONNECTION_NONCE_KEY)
+	if connection_nonce != "":
+		credential[CONNECTION_NONCE_KEY] = connection_nonce
 
 	var key: Variant = rate_key if rate_key != null else str(
 		credential.get("device_id", "anonymous")
@@ -570,12 +586,19 @@ func _authenticate_ticket(credential: Dictionary) -> DotResult:
 
 	var d: Dictionary = verified.value
 	var jti := str(d["jti"])
+	if jti == "":
+		return DotResult.fail(
+			DotError.CODE_INVALID, "This connect ticket is not valid.", "no jti"
+		)
+
+	var bound := _check_ticket_binding(str(d.get("nonce", "")), credential)
+	if not bound.ok:
+		return bound
 
 	_sweep_spent()
 
-	# Single use. A ticket captured in flight — on a shared network, in a proxy
-	# log — must not be replayable while it is still inside its validity window.
-	if jti != "" and _spent_tickets.has(jti):
+	# Single use, so a ticket copied in flight cannot be replayed within its life.
+	if _spent_tickets.has(jti):
 		DotLog.warn(
 			CHANNEL,
 			"a connect ticket was presented twice",
@@ -587,8 +610,19 @@ func _authenticate_ticket(credential: Dictionary) -> DotResult:
 			"replay refused"
 		)
 
-	if jti != "":
-		_spent_tickets[jti] = int(d["exp"])
+	if _spent_tickets.size() >= config.ticket_replay_max:
+		_last_sweep = 0
+		_sweep_spent()
+		if _spent_tickets.size() >= config.ticket_replay_max:
+			DotLog.warn(CHANNEL, "the spent-ticket memory is full; refusing tickets", {
+				"max": config.ticket_replay_max,
+			})
+			return DotResult.fail(
+				DotError.CODE_RATE_LIMITED,
+				"This server is busy. Try again in a moment.",
+				"spent-ticket memory full"
+			)
+	_spent_tickets[jti] = int(d["exp"])
 
 	var identity: DotAuthIdentity = d["identity"]
 	_apply_requested_name(identity, credential)
@@ -598,6 +632,30 @@ func _authenticate_ticket(credential: Dictionary) -> DotResult:
 	)
 
 	return DotResult.success(identity)
+
+
+## A ticket bound to a connection nonce must name this connection's; an unbound one
+## is refused only under [member DotAuthConfig.require_ticket_binding].
+func _check_ticket_binding(ticket_nonce: String, credential: Dictionary) -> DotResult:
+	var ours := str(credential.get(CONNECTION_NONCE_KEY, ""))
+	if ticket_nonce == "":
+		if config.require_ticket_binding:
+			return DotResult.fail(
+				DotError.CODE_FORBIDDEN,
+				"This server needs a newer version of the game to sign in.",
+				"unbound ticket refused (require_ticket_binding)"
+			)
+		return DotResult.success(null)
+	if ours == "" or not DotHash.constant_time_equal(
+			ticket_nonce.to_utf8_buffer(), ours.to_utf8_buffer()
+	):
+		DotLog.warn(CHANNEL, "a connect ticket bound to another connection was presented")
+		return DotResult.fail(
+			DotError.CODE_FORBIDDEN,
+			"This connect ticket was issued for another connection.",
+			"nonce mismatch"
+		)
+	return DotResult.success(null)
 
 
 ## True when tickets can be verified: a server id and at least one issuer key.
@@ -621,7 +679,8 @@ func adopt_ticket_trust(server_id: String, keys: Dictionary) -> DotResult:
 			return DotResult.fail(
 				DotError.CODE_INVALID, "Issuer keys must be public-key PEMs with a key id."
 			)
-		ring[str(kid)] = pem
+		if not _revoked_kids.has(str(kid)):
+			ring[str(kid)] = pem
 	var sid := server_id.strip_edges()
 	if sid != "" and not sid.is_valid_int():
 		return DotResult.fail(DotError.CODE_INVALID, "A server id is a number.", sid)
@@ -635,6 +694,8 @@ func adopt_ticket_trust(server_id: String, keys: Dictionary) -> DotResult:
 			config.server_id = sid
 	if not ring.is_empty():
 		config.ticket_public_keys = ring
+	for kid in _revoked_kids:
+		config.ticket_public_keys.erase(kid)
 	_save_ticket_trust_cache()
 	DotLog.info(CHANNEL, "ticket trust adopted", {
 		"server_id": config.server_id,
@@ -673,6 +734,8 @@ func refresh_ticket_keys(force: bool = false) -> DotResult:
 			"url": url, "why": res.error.message, "have": config.ticket_public_keys.size(),
 		})
 		return res
+	revoke_ticket_keys(parse_ticket_revoked(res.value))
+	_apply_keys_refresh(parse_ticket_refresh_sec(res.value))
 	var ring := parse_ticket_keys(res.value)
 	if ring.is_empty():
 		DotLog.warn(CHANNEL, "the backbone publishes no ticket keys yet", {"url": url})
@@ -699,6 +762,52 @@ static func parse_ticket_keys(reply: Variant) -> Dictionary:
 	return ring
 
 
+## Key ids a `ticket-keys` reply lists under `revoked`.
+static func parse_ticket_revoked(reply: Variant) -> PackedStringArray:
+	var out := PackedStringArray()
+	var body: Variant = reply
+	if body is Dictionary and (body as Dictionary).get("data") is Dictionary:
+		body = body["data"]
+	if body is Dictionary and (body as Dictionary).get("revoked") is Array:
+		for kid in body["revoked"]:
+			if kid is String and kid != "":
+				out.append(kid)
+	return out
+
+
+## The `refreshSec` a `ticket-keys` reply asks for, or 0.
+static func parse_ticket_refresh_sec(reply: Variant) -> float:
+	var body: Variant = reply
+	if body is Dictionary and (body as Dictionary).get("data") is Dictionary:
+		body = body["data"]
+	if body is Dictionary:
+		return _number_of(body, "refreshSec")
+	return 0.0
+
+
+## Never trusts [param kids] again, now or after a restart (the trust cache keeps them).
+func revoke_ticket_keys(kids: PackedStringArray) -> void:
+	var added := PackedStringArray()
+	for kid in kids:
+		if not _revoked_kids.has(kid):
+			_revoked_kids[kid] = true
+			added.append(kid)
+		config.ticket_public_keys.erase(kid)
+	if added.is_empty():
+		return
+	DotLog.warn(CHANNEL, "issuer keys revoked", {"kids": ",".join(added)})
+	_save_ticket_trust_cache()
+
+
+func _apply_keys_refresh(sec: float) -> void:
+	if sec <= 0.0:
+		return
+	_keys_refresh_sec = clampf(sec, 300.0, 6 * 3600.0)
+	var t := get_node_or_null("TicketKeysRefresh") as Timer
+	if t != null and not is_equal_approx(t.wait_time, _keys_refresh_sec):
+		t.wait_time = _keys_refresh_sec
+
+
 static func _trusted_key_url(url: String) -> bool:
 	if url.begins_with("https://"):
 		return true
@@ -714,6 +823,10 @@ func _load_ticket_trust_cache() -> void:
 	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(config.ticket_trust_cache))
 	if not (parsed is Dictionary) or str(parsed.get("backbone_url", "")) != config.backbone_url:
 		return
+	if parsed.get("revoked") is Array:
+		for kid in parsed["revoked"]:
+			if kid is String and kid != "":
+				_revoked_kids[kid] = true
 	var keys: Variant = parsed.get("keys")
 	var adopted := adopt_ticket_trust(
 		str(parsed.get("server_id", "")), keys if keys is Dictionary else {}
@@ -737,6 +850,7 @@ func _save_ticket_trust_cache() -> void:
 		"backbone_url": config.backbone_url,
 		"server_id": config.server_id if _server_id_source != "config" else "",
 		"keys": config.ticket_public_keys,
+		"revoked": _revoked_kids.keys(),
 	}, "\t"))
 	f.close()
 	DotWeb.sync_filesystem()
@@ -751,6 +865,10 @@ func _ticket_key_for(ticket: String) -> DotResult:
 	if not peeked.ok:
 		return DotResult.fail(DotError.CODE_AUTH, "This connect ticket is not valid.", "malformed")
 	var kid := str((peeked.value["header"] as Dictionary).get("kid", ""))
+	if _revoked_kids.has(kid):
+		return DotResult.fail(
+			DotError.CODE_FORBIDDEN, "This connect ticket is not valid.", "revoked key id"
+		)
 	if kid == "" and config.ticket_public_keys.size() == 1:
 		return DotResult.success(config.ticket_public_keys.values()[0])
 	if config.ticket_public_keys.has(kid):
@@ -1143,8 +1261,22 @@ func _discover_join_audience() -> void:
 		return
 	_discovered_audience = audience
 	DotLog.info(CHANNEL, "join audience", {"audience": audience})
+	_warn_about_hostname((target as Dictionary).get("hostname"))
 	if config.adopt_ticket_trust and audience.begins_with("server:"):
 		adopt_ticket_trust(audience.trim_prefix("server:"), {})
+
+
+## Players sign in by the name they dial, so an unproven or copied name is the
+## operator's to fix (by enrolling the server again).
+func _warn_about_hostname(h: Variant) -> void:
+	if not (h is Dictionary) or str(h.get("name", "")) == "":
+		return
+	var rivals := int(_number_of(h, "rivals"))
+	if h.get("proven") != true or rivals > 0:
+		DotLog.warn(CHANNEL, "this server's hostname is not proven to the site", {
+			"name": str(h["name"]), "proven": h.get("proven") == true, "rivals": rivals,
+			"fix": "enroll the server again from the host that answers at that name",
+		})
 
 
 static func _number_of(d: Dictionary, key: String) -> float:

@@ -170,6 +170,14 @@ var ticket_public_keys: Dictionary = {}
 ## having been used and can be replayed in the gap.
 @export_range(60, 7200, 60) var ticket_replay_memory_sec: int = 900
 
+## Most spent ticket ids remembered; past it new tickets are refused until old ones
+## expire, since forgetting one early would let it be replayed.
+@export_range(1000, 1000000, 1000) var ticket_replay_max: int = 100000
+
+## Refuse a ticket that is not bound to this connection's challenge nonce. Off while
+## older clients, which ask for unbound tickets, are still about.
+@export var require_ticket_binding: bool = false
+
 ## Accept guests when authentication fails or is unavailable.
 ##
 ## Sensible for a casual server that would rather have players than identities.

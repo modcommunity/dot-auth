@@ -40,7 +40,8 @@ static func issue(
 	private_key_pem: String,
 	issuer_name: String,
 	ttl_sec: int,
-	key_id: String = "default"
+	key_id: String = "default",
+	nonce: String = ""
 ) -> DotResult:
 	if server_id.strip_edges() == "":
 		return DotResult.fail(
@@ -70,6 +71,9 @@ static func issue(
 		claims["avatar"] = identity.avatar_url
 	if not identity.claims.is_empty():
 		claims["claims"] = identity.claims
+	# Binds the ticket to the one connection whose challenge carried this nonce.
+	if nonce != "":
+		claims["nonce"] = nonce
 
 	return DotJwt.encode_rs256(claims, private_key_pem, key_id)
 
@@ -136,6 +140,7 @@ static func verify(
 		"identity": identity,
 		"jti": str(claims.get("jti", "")),
 		"exp": int(claims.get("exp", 0)),
+		"nonce": str(claims.get("nonce", "")),
 	})
 
 

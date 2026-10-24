@@ -46,7 +46,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) and [docs/backbone.md](../../docs/b
 **Tickets and sessions**
 
 - A server never receives a player's backbone token on a public server: `TICKET` is for public servers, `INTROSPECT` for first-party only, and even then the client sends a single-use join token minted for the announced audience, never `valid_access_token()`. A client sends only the credential asked for. [strategies](docs/strategies.md#introspect-never-hands-a-server-the-access-token) [tickets](docs/tickets.md#the-central-design-problem-and-the-answer)
-- A ticket is audience-scoped, minutes long, single-use and RS256. `validate()` refuses `TICKET` without `server_id` and replay memory not longer than the ticket's life. A client asks for one by the address it dialled, never the announced id; an adopting server verifies nothing until it holds an id and a key from its own backbone. [tickets](docs/tickets.md#the-backbones-own-issuer-by-dialled-address) [tickets](docs/tickets.md#the-central-design-problem-and-the-answer)
+- A ticket is audience-scoped, minutes long, single-use and RS256. `validate()` refuses `TICKET` without `server_id` and replay memory not longer than the ticket's life. A client asks for one by the address it dialled, never the announced id, with the server's challenge nonce; the host passes its own nonce to `authenticate`, never one from the credential; an adopting server verifies nothing until it holds an id and a key from its own backbone. [tickets](docs/tickets.md#the-backbones-own-issuer-by-dialled-address) [tickets](docs/tickets.md#the-central-design-problem-and-the-answer)
 - `single_session` lives on the issuer; rosters are absolute; an unconfirmed session is never ended by a roster; `session_lease_sec >= ticket_ttl_sec`; server keys are per server. [tickets](docs/tickets.md#one-seat-per-account)
 - `DotAuthServer` builds the `DotAuthSessionReporter` when `session_report_url` is set and follows the registry's `dot_server`; the roster is every signed-on session, not only those in play. [tickets](docs/tickets.md#who-builds-the-reporter-and-which-stops-it-reports)
 - The goodbye is synchronous (`report_offline_now()`, bounded): `shutdown()` and `quit()` report; SIGINT/SIGTERM/kill do not and fall to the lease. [tickets](docs/tickets.md#who-builds-the-reporter-and-which-stops-it-reports)
@@ -84,4 +84,4 @@ Read the family [CLAUDE.md](../../CLAUDE.md) and [docs/backbone.md](../../docs/b
 | Anything a player reports about themselves | `DotAuthClient.post_app` / `get_app` |
 | Embedding the issuer in another service | `listen_port = 0`, `issue_for_token()` |
 
-Deliberately not here: the OAuth authorization-code flow, platform SSO, Ed25519, token binding to a connection. [strategies](docs/strategies.md#deliberately-not-here)
+Deliberately not here: the OAuth authorization-code flow, platform SSO, Ed25519, binding a ticket to the transport's keys. [strategies](docs/strategies.md#deliberately-not-here)
