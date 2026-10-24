@@ -40,6 +40,9 @@ const JOIN_TOKEN_PREFIX := "tmc_jt_"
 
 signal authenticated(identity: DotAuthIdentity)
 signal rejected(reason: String, detail: String)
+## A ticket named a key id this server does not hold: the issuer rotated its key.
+## The host refetches the issuer's keys (from its own backbone, never the client).
+signal ticket_key_wanted(kid: String)
 
 @export_group("Configuration")
 
@@ -87,11 +90,22 @@ var session_reporter: DotAuthSessionReporter = null
 var backbone: DotBackboneClient = null:
 	set(value):
 		backbone = value
-		if value != null and config != null and config.join_audience == "":
+		if value != null and config != null \
+				and (config.join_audience == "" or config.adopt_ticket_trust):
 			_discover_join_audience.call_deferred()
 
 ## The audience learnt from the backbone; see [method join_audience].
 var _discovered_audience: String = ""
+
+## How often adopted issuer keys are refetched, and the least time between two fetches
+## an unknown `kid` may cause.
+const TICKET_KEYS_REFRESH_SEC := 6 * 3600.0
+const TICKET_KEYS_MIN_GAP_MSEC := 60_000
+
+## "config" when auth.yml named the server id (it then wins over the site's).
+var _server_id_source := ""
+var _keys_fetched_msec := -TICKET_KEYS_MIN_GAP_MSEC
+var _keys_fetching := false
 
 ## How many failed `integration/v1/me` reads [method join_audience] discovery retries,
 ## with backoff capped at 30 s (the default is about an hour).
@@ -215,7 +229,9 @@ func start() -> DotResult:
 
 	config.warn_about_risky_settings()
 
-	if config.strategy == DotAuthConfig.Strategy.INTROSPECT:
+	if config.server_id != "":
+		_server_id_source = "config"
+	if config.strategy == DotAuthConfig.Strategy.INTROSPECT or config.adopt_ticket_trust:
 		_http = DotHttp.new()
 		_http.name = "AuthServerHttp"
 		_http.timeout_sec = 10.0
@@ -255,6 +271,17 @@ func start() -> DotResult:
 	_build_session_reporter()
 
 	_started = true
+
+	if config.adopt_ticket_trust:
+		_load_ticket_trust_cache()
+		ticket_key_wanted.connect(func(_kid: String) -> void: refresh_ticket_keys())
+		refresh_ticket_keys.call_deferred()
+		var t := Timer.new()
+		t.name = "TicketKeysRefresh"
+		t.wait_time = TICKET_KEYS_REFRESH_SEC
+		t.autostart = true
+		t.timeout.connect(func() -> void: refresh_ticket_keys(true))
+		add_child(t)
 
 	DotLog.info(
 		CHANNEL,
@@ -521,9 +548,19 @@ func _authenticate_ticket(credential: Dictionary) -> DotResult:
 			"no ticket presented"
 		)
 
+	if not ticket_trust_ready():
+		return DotResult.fail(
+			DotError.CODE_STATE,
+			"This server cannot verify sign-ins yet. Try again in a moment.",
+			"no server_id or issuer key adopted yet"
+		)
+	var key := _ticket_key_for(ticket)
+	if not key.ok:
+		return key
+
 	var verified := DotAuthTicket.verify(
 		ticket,
-		config.ticket_public_key,
+		str(key.value),
 		config.server_id,
 		config.ticket_leeway_sec
 	)
@@ -563,6 +600,169 @@ func _authenticate_ticket(credential: Dictionary) -> DotResult:
 	return DotResult.success(identity)
 
 
+## True when tickets can be verified: a server id and at least one issuer key.
+func ticket_trust_ready() -> bool:
+	if config == null or config.server_id == "":
+		return false
+	return config.ticket_public_key.strip_edges() != "" \
+		or not config.ticket_public_keys.is_empty()
+
+
+## Adopts the server id and issuer keys ([code]{kid: pem}[/code]) the host fetched from
+## its backbone. An explicit [member DotAuthConfig.server_id] or
+## [member DotAuthConfig.ticket_public_key] wins; only public-key PEMs are taken.
+func adopt_ticket_trust(server_id: String, keys: Dictionary) -> DotResult:
+	if config == null:
+		return DotResult.fail(DotError.CODE_STATE, "No configuration.")
+	var ring := {}
+	for kid in keys:
+		var pem := str(keys[kid])
+		if str(kid) == "" or not pem.contains("BEGIN PUBLIC KEY") or pem.contains("PRIVATE"):
+			return DotResult.fail(
+				DotError.CODE_INVALID, "Issuer keys must be public-key PEMs with a key id."
+			)
+		ring[str(kid)] = pem
+	var sid := server_id.strip_edges()
+	if sid != "" and not sid.is_valid_int():
+		return DotResult.fail(DotError.CODE_INVALID, "A server id is a number.", sid)
+	var pinned := _server_id_source == "config" or (not _started and config.server_id != "")
+	if sid != "" and sid != config.server_id:
+		if pinned:
+			DotLog.warn(CHANNEL, "auth.yml's server_id differs from the site's; keeping auth.yml's", {
+				"configured": config.server_id, "site": sid,
+			})
+		else:
+			config.server_id = sid
+	if not ring.is_empty():
+		config.ticket_public_keys = ring
+	_save_ticket_trust_cache()
+	DotLog.info(CHANNEL, "ticket trust adopted", {
+		"server_id": config.server_id,
+		"keys": ",".join(PackedStringArray(config.ticket_public_keys.keys())),
+		"explicit_key": config.ticket_public_key.strip_edges() != "",
+	})
+	return DotResult.success(ticket_trust_ready())
+
+
+## Fetches the issuer's public keys from this server's own backbone
+## (`/api/app/v1/auth/ticket-keys`), never from a client or a dialled server. HTTPS with
+## a verified certificate unless the backbone is on loopback. At most once a minute
+## unless [param force].
+func refresh_ticket_keys(force: bool = false) -> DotResult:
+	if config == null or _http == null:
+		return DotResult.fail(DotError.CODE_STATE, "Not fetching issuer keys now.")
+	if _keys_fetching:
+		while _keys_fetching and is_inside_tree():
+			await get_tree().process_frame
+		return DotResult.success(ticket_trust_ready()) if not config.ticket_public_keys.is_empty() \
+			else DotResult.fail(DotError.CODE_STATE, "The issuer's keys could not be fetched.")
+	if not force and Time.get_ticks_msec() - _keys_fetched_msec < TICKET_KEYS_MIN_GAP_MSEC:
+		return DotResult.fail(DotError.CODE_RATE_LIMITED, "Issuer keys were fetched recently.")
+	var url := config.app_endpoint("auth/ticket-keys")
+	if not _trusted_key_url(url):
+		DotLog.error(CHANNEL, "refusing to fetch issuer keys over plain HTTP", {
+			"url": url, "fix": "an https backbone_url, or issuer_public_key_file",
+		})
+		return DotResult.fail(DotError.CODE_FORBIDDEN, "Issuer keys need HTTPS.", url)
+	_keys_fetching = true
+	_keys_fetched_msec = Time.get_ticks_msec()
+	var res: DotResult = await _http.get_json(url)
+	_keys_fetching = false
+	if not res.ok:
+		DotLog.warn(CHANNEL, "could not fetch the issuer's keys", {
+			"url": url, "why": res.error.message, "have": config.ticket_public_keys.size(),
+		})
+		return res
+	var ring := parse_ticket_keys(res.value)
+	if ring.is_empty():
+		DotLog.warn(CHANNEL, "the backbone publishes no ticket keys yet", {"url": url})
+		return DotResult.fail(DotError.CODE_STATE, "The site publishes no ticket keys.")
+	return adopt_ticket_trust("", ring)
+
+
+## [code]{kid: pem}[/code] from a `ticket-keys` reply (enveloped or not), RS256 only.
+static func parse_ticket_keys(reply: Variant) -> Dictionary:
+	var ring := {}
+	if not (reply is Dictionary):
+		return ring
+	var body: Dictionary = reply
+	if body.get("data") is Dictionary:
+		body = body["data"]
+	var keys: Variant = body.get("keys")
+	if not (keys is Array):
+		return ring
+	for k in keys:
+		if k is Dictionary and str(k.get("alg", "")) == "RS256" and str(k.get("kid", "")) != "" \
+				and str(k.get("pem", "")).contains("BEGIN PUBLIC KEY") \
+				and not str(k.get("pem", "")).contains("PRIVATE"):
+			ring[str(k["kid"])] = str(k["pem"])
+	return ring
+
+
+static func _trusted_key_url(url: String) -> bool:
+	if url.begins_with("https://"):
+		return true
+	for local in ["http://127.0.0.1", "http://localhost", "http://[::1]"]:
+		if url.begins_with(local + ":") or url.begins_with(local + "/"):
+			return true
+	return false
+
+
+func _load_ticket_trust_cache() -> void:
+	if config.ticket_trust_cache == "" or not FileAccess.file_exists(config.ticket_trust_cache):
+		return
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(config.ticket_trust_cache))
+	if not (parsed is Dictionary) or str(parsed.get("backbone_url", "")) != config.backbone_url:
+		return
+	var keys: Variant = parsed.get("keys")
+	var adopted := adopt_ticket_trust(
+		str(parsed.get("server_id", "")), keys if keys is Dictionary else {}
+	)
+	if not adopted.ok:
+		DotLog.warn(CHANNEL, "ignoring a bad ticket trust cache", {
+			"path": config.ticket_trust_cache, "why": adopted.error.message,
+		})
+
+
+func _save_ticket_trust_cache() -> void:
+	if config.ticket_trust_cache == "" or not _started:
+		return
+	var f := FileAccess.open(config.ticket_trust_cache, FileAccess.WRITE)
+	if f == null:
+		DotLog.warn(CHANNEL, "could not write the ticket trust cache", {
+			"path": config.ticket_trust_cache, "err": error_string(FileAccess.get_open_error()),
+		})
+		return
+	f.store_string(JSON.stringify({
+		"backbone_url": config.backbone_url,
+		"server_id": config.server_id if _server_id_source != "config" else "",
+		"keys": config.ticket_public_keys,
+	}, "\t"))
+	f.close()
+	DotWeb.sync_filesystem()
+
+
+## The PEM to verify [param ticket] with: the explicit key, else the ring entry its
+## `kid` names. An unknown kid asks the host for a refetch and refuses this join.
+func _ticket_key_for(ticket: String) -> DotResult:
+	if config.ticket_public_key.strip_edges() != "":
+		return DotResult.success(config.ticket_public_key)
+	var peeked := DotJwt.peek(ticket)
+	if not peeked.ok:
+		return DotResult.fail(DotError.CODE_AUTH, "This connect ticket is not valid.", "malformed")
+	var kid := str((peeked.value["header"] as Dictionary).get("kid", ""))
+	if kid == "" and config.ticket_public_keys.size() == 1:
+		return DotResult.success(config.ticket_public_keys.values()[0])
+	if config.ticket_public_keys.has(kid):
+		return DotResult.success(config.ticket_public_keys[kid])
+	ticket_key_wanted.emit(kid)
+	return DotResult.fail(
+		DotError.CODE_STATE,
+		"This server is updating its sign-in keys. Try again in a moment.",
+		"unknown ticket key id %s" % kid.substr(0, 24)
+	)
+
+
 ## Resolves what an INTROSPECT client sent.
 ##
 ## With a [member backbone]: a single-use join token (or a legacy web build's GAME
@@ -570,11 +770,12 @@ func _authenticate_ticket(credential: Dictionary) -> DotResult:
 ## operator nothing to replay. Without one: `/api/app/v1/me`, first-party servers
 ## only. A client that will not send a token here (this server is not on its
 ## first-party list) sends a connect ticket instead, which is verified offline when
-## [member DotAuthConfig.ticket_public_key] is set.
+## an issuer key is set or adopted.
 func _authenticate_introspect(credential: Dictionary) -> DotResult:
 	var token := str(credential.get("access_token", ""))
 	if token == "" and str(credential.get("ticket", "")) != "" \
-			and config.ticket_public_key != "":
+			and (config.ticket_public_key != "" or config.adopt_ticket_trust
+				or not config.ticket_public_keys.is_empty()):
 		return _authenticate_ticket(credential)
 	if token == "":
 		return DotResult.fail(
@@ -942,6 +1143,8 @@ func _discover_join_audience() -> void:
 		return
 	_discovered_audience = audience
 	DotLog.info(CHANNEL, "join audience", {"audience": audience})
+	if config.adopt_ticket_trust and audience.begins_with("server:"):
+		adopt_ticket_trust(audience.trim_prefix("server:"), {})
 
 
 static func _number_of(d: Dictionary, key: String) -> float:
@@ -969,6 +1172,8 @@ func describe() -> Dictionary:
 	return {
 		"strategy": strategy_name(),
 		"server_id": config.server_id if config != null else "",
+		"ticket_trust_ready": ticket_trust_ready(),
+		"ticket_keys": config.ticket_public_keys.keys() if config != null else [],
 		"guests_allowed": config.allow_guests if config != null else false,
 		"local_profiles": (
 			_local_profiles.describe() if _local_profiles != null else null

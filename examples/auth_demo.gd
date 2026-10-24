@@ -30,12 +30,12 @@ const SERVER_B := "us-east-2"
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 14
+const SECTIONS := 15
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 168
+const CHECKS := 189
 
 var _entered := 0
 var _completed := 0
@@ -74,6 +74,7 @@ func _run() -> void:
 	await _test_scoped_introspect()
 	await _test_audience_discovery()
 	await _test_launcher_handoff()
+	await _test_ticket_trust(keys)
 
 	_line("")
 	# The two guards, as the last two checks. See docs/testing.md.
@@ -241,6 +242,173 @@ func _test_launcher_handoff() -> void:
 	tcp.stop()
 	client.queue_free()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://auth_demo_launcher_tokens.dat"))
+	_done()
+
+
+## Ticket trust adopted at runtime: the server id from `integration/v1/me`, the issuer
+## keys from the backbone's `ticket-keys` (a loopback stub), selected by `kid`, cached;
+## and the client asking for a ticket by the address it dialled. Armed by: verifying with
+## an empty audience (the before-adoption join is accepted), or ignoring `kid` (the
+## unknown-key join verifies against the wrong key and fails with INTEGRITY, not STATE).
+func _test_ticket_trust(keys: Dictionary) -> void:
+	_line("")
+	_section("[b]ticket trust by address[/b]")
+
+	var other := DotCloudKeys_generate()
+	var id := "3550523"
+	var ada: DotAuthIdentity = DotAuthIdentity.from_scoped_user(
+		{"key": "Kq3_scopedKey-forThis1", "name": "Ada", "username": "ada"}).value
+	var mint := func(aud: String, pem: String, kid: String) -> String:
+		return str(DotAuthTicket.issue(ada, aud, pem, "tmc-site", 120, kid).value)
+
+	var tcp := TCPServer.new()
+	if tcp.listen(0, "127.0.0.1") != OK:
+		_line("  (no loopback port; skipped)")
+		_passed += 21
+		_done()
+		return
+	var seen: Array[Dictionary] = []
+	var serve := func() -> void:
+		while tcp.is_connection_available():
+			var peer := tcp.take_connection()
+			var raw := ""
+			var deadline := Time.get_ticks_msec() + 3000
+			while Time.get_ticks_msec() < deadline:
+				peer.poll()
+				var n := peer.get_available_bytes()
+				if n > 0:
+					raw += peer.get_utf8_string(n)
+				var split := raw.find("\r\n\r\n")
+				if split >= 0:
+					var length := 0
+					for h in raw.substr(0, split).split("\r\n"):
+						if h.to_lower().begins_with("content-length:"):
+							length = int(h.substr(15).strip_edges())
+					if raw.to_utf8_buffer().size() - split - 4 >= length:
+						break
+				OS.delay_msec(2)
+			var head := raw.substr(0, raw.find("\r\n"))
+			var text_in := raw.substr(raw.find("\r\n\r\n") + 4)
+			var body: Variant = JSON.parse_string(text_in) if text_in != "" else null
+			seen.append({"line": head, "body": body})
+			var answer: Dictionary = {"ok": false, "error": {"code": "unknown_address", "message": "No listed server has that address."}}
+			var status := 404
+			if head.begins_with("GET /api/app/v1/auth/ticket-keys "):
+				status = 200
+				answer = {"ok": true, "data": {"issuer": "tmc-site", "keys": [
+					{"kid": "k1", "alg": "RS256", "pem": str(keys["public"])},
+					{"kid": "hs", "alg": "HS256", "pem": str(keys["public"])},
+					{"kid": "bad", "alg": "RS256", "pem": str(keys["private"])},
+				]}}
+			elif head.begins_with("POST /api/app/v1/auth/ticket ") and body is Dictionary \
+					and str(body.get("address", "")) == "play.example.com:6005":
+				status = 200
+				answer = {"ok": true, "data": {"ticket": "t-for-6005", "expiresIn": 120, "serverId": id}}
+			var text := JSON.stringify(answer)
+			peer.put_data(("HTTP/1.1 %d X\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s"
+				% [status, text.to_utf8_buffer().size(), text]).to_utf8_buffer())
+			peer.disconnect_from_host()
+	get_tree().process_frame.connect(serve)
+	var stub := "http://127.0.0.1:%d" % tcp.get_local_port()
+	var cache := "user://auth_demo_ticket_trust.json"
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(cache))
+
+	var config := DotAuthConfig.new()
+	config.strategy = DotAuthConfig.Strategy.TICKET
+	config.adopt_ticket_trust = true
+	config.allow_guests = false
+	config.backbone_url = stub
+	config.ticket_trust_cache = cache
+	_check("ticket mode starts with no id or key", config.validate().ok, config.validate())
+	var server := DotAuthServer.new()
+	server.config = config
+	server.config_file = ""
+	server.register_service = false
+	server.discover_audience_tries = 1
+	add_child(server)
+	server.start()
+	_check("and is not ready to verify", not server.ticket_trust_ready(), null)
+
+	var early := await server.authenticate({"ticket": mint.call(id, str(keys["private"]), "k1")}, "p1")
+	_check("so a sign-in waits, refused as STATE", not early.ok and early.code() == DotError.CODE_STATE, early)
+
+	var fetched := await server.refresh_ticket_keys(true)
+	_check("keys fetched from the backbone", fetched.ok and config.ticket_public_keys.has("k1"), fetched)
+	_check("only RS256 public keys kept", config.ticket_public_keys.keys() == ["k1"], null)
+	_check("at its ticket-keys route", seen.size() >= 1 and str(seen[-1]["line"]).begins_with("GET /api/app/v1/auth/ticket-keys "), null)
+	var noid := await server.authenticate({"ticket": mint.call(id, str(keys["private"]), "k1")}, "p2")
+	_check("a key alone is not enough (no audience)", not noid.ok and noid.code() == DotError.CODE_STATE, noid)
+
+	var me := FlakyMeBackbone.new()
+	me.fail_first = 0
+	server.backbone = me
+	for i in 20:
+		if config.server_id != "":
+			break
+		await get_tree().process_frame
+	_check("server id adopted from integration/v1/me", config.server_id == id and server.ticket_trust_ready(), null)
+
+	var good: String = mint.call(id, str(keys["private"]), "k1")
+	var first := await server.authenticate({"ticket": good}, "p3")
+	_check("a ticket for this server verifies", first.ok and (first.value as DotAuthIdentity).uid == ada.uid, first)
+	var again := await server.authenticate({"ticket": good}, "p4")
+	_check("and is single-use", not again.ok and again.code() == DotError.CODE_FORBIDDEN, again)
+	var elsewhere := await server.authenticate({"ticket": mint.call("3550524", str(keys["private"]), "k1")}, "p5")
+	_check("one for another server is refused", not elsewhere.ok and elsewhere.code() == DotError.CODE_FORBIDDEN, elsewhere)
+
+	var wanted: Array[String] = []
+	server.ticket_key_wanted.connect(func(kid: String) -> void: wanted.append(kid))
+	var rotated := await server.authenticate({"ticket": mint.call(id, str(other["private"]), "k2")}, "p6")
+	_check("an unknown kid is refused as STATE", not rotated.ok and rotated.code() == DotError.CODE_STATE, rotated)
+	_check("and asks for a refetch", wanted == ["k2"], null)
+	var forged := await server.authenticate({"ticket": mint.call(id, str(other["private"]), "k1")}, "p7")
+	_check("a known kid with the wrong key is refused", not forged.ok and forged.code() == DotError.CODE_INTEGRITY, forged)
+
+	var priv := server.adopt_ticket_trust("", {"x": str(keys["private"])})
+	_check("a private key is never adopted", not priv.ok and not config.ticket_public_keys.has("x"), priv)
+	_check("plain HTTP to a remote backbone is refused",
+		not DotAuthServer._trusted_key_url("http://example.com/api/app/v1/auth/ticket-keys")
+			and DotAuthServer._trusted_key_url("https://example.com/x"), null)
+
+	var reloaded := DotAuthConfig.new()
+	reloaded.strategy = DotAuthConfig.Strategy.TICKET
+	reloaded.adopt_ticket_trust = true
+	reloaded.backbone_url = stub
+	reloaded.ticket_trust_cache = cache
+	reloaded.server_id = "777"
+	var second := DotAuthServer.new()
+	second.config = reloaded
+	second.config_file = ""
+	second.register_service = false
+	add_child(second)
+	second.start()
+	_check("a restart reads the cached keys", reloaded.ticket_public_keys.has("k1"), null)
+	_check("and auth.yml's server_id still wins", reloaded.server_id == "777", null)
+	second.adopt_ticket_trust(id, {})
+	_check("over the site's too", reloaded.server_id == "777", null)
+
+	var client := DotAuthClient.new()
+	client.auto_sign_in = false
+	client.config_file = ""
+	client.config = DotAuthConfig.new()
+	client.config.backbone_url = stub
+	client.config.token_store_path = "user://auth_demo_trust_tokens.dat"
+	add_child(client)
+	client.store.set_tokens("player-access", "player-refresh", 900)
+	var asked := await client.request_ticket_for_address("play.example.com:6005")
+	_check("a client asks by the address it dialled", asked.ok and asked.value == "t-for-6005", asked)
+	var unknown := await client.request_ticket_for_address("other.example.com:6005")
+	_check("an unlisted address keeps the site's code",
+		not unknown.ok and unknown.error.detail == "unknown_address", unknown)
+
+	get_tree().process_frame.disconnect(serve)
+	tcp.stop()
+	client.queue_free()
+	server.queue_free()
+	second.queue_free()
+	me.free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(cache))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://auth_demo_trust_tokens.dat"))
 	_done()
 
 

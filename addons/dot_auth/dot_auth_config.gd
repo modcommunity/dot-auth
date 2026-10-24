@@ -131,8 +131,29 @@ enum Strategy {
 ## another audience (`wrong_audience`).
 @export var join_audience: String = ""
 
-## PEM public key of the ticket issuer, for [constant Strategy.TICKET].
+## PEM public key of the ticket issuer, for [constant Strategy.TICKET]. When set it is
+## the only key trusted, whatever [member ticket_public_keys] holds.
 @export_multiline var ticket_public_key: String = ""
+
+## Issuer public keys by key id (`kid`), filled at runtime by
+## [method DotAuthServer.adopt_ticket_trust]. Not layered: it comes from the backbone only.
+var ticket_public_keys: Dictionary = {}
+
+## Let [constant Strategy.TICKET] start with no [member server_id] or key and adopt both
+## later through [method DotAuthServer.adopt_ticket_trust]. Signed-in joins are refused
+## until then; a ticket is never verified without an audience.
+@export var adopt_ticket_trust: bool = false
+
+## File the adopted server id and issuer keys are kept in, so a restart verifies
+## tickets before the backbone answers. Bound to [member backbone_url]: a cache written
+## for another backbone is ignored. Empty keeps nothing.
+@export var ticket_trust_cache: String = ""
+
+## Where a client asks for connect tickets. Empty means the backbone's own issuer
+## (`POST /api/app/v1/auth/ticket`); a publisher running [DotAuthIssuer] names its base
+## URL. The bearer token goes there, so it is layered like [member backbone_url]:
+## never from a page's query string.
+@export var ticket_issuer_url: String = ""
 
 ## Seconds a ticket stays valid after issue.
 ##
@@ -349,14 +370,16 @@ func load_cfg(file_name: String = "auth.yml", legacy_dir: String = "res://cfg") 
 func validate() -> DotResult:
 	match strategy:
 		Strategy.TICKET:
-			if server_id == "":
+			if adopt_ticket_trust:
+				pass
+			elif server_id == "":
 				return DotResult.fail(
 					DotError.CODE_INVALID,
 					"TICKET authentication needs a server_id.",
 					"tickets are scoped to one server; without an id this "
 					+ "server would accept tickets minted for any other"
 				)
-			if ticket_public_key.strip_edges() == "":
+			if ticket_public_key.strip_edges() == "" and not adopt_ticket_trust:
 				return DotResult.fail(
 					DotError.CODE_INVALID,
 					"TICKET authentication needs ticket_public_key."

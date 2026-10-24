@@ -815,6 +815,43 @@ func request_ticket(issuer_url: String, server_id: String) -> DotResult:
 	return DotResult.success(ticket)
 
 
+## Asks for a connect ticket for the server at [param address], the address THIS
+## client dialled ([code]host:port[/code]), never one a server announced: a hostile
+## server naming another's id would get a ticket valid there. [param issuer_url]
+## defaults to [member DotAuthConfig.ticket_issuer_url]; empty means the backbone's
+## own issuer. Returns the ticket.
+func request_ticket_for_address(address: String, issuer_url: String = "") -> DotResult:
+	if address.strip_edges() == "":
+		return DotResult.fail(DotError.CODE_INVALID, "No server address to ask a ticket for.")
+	var issuer := issuer_url if issuer_url != "" else config.ticket_issuer_url
+	var res: DotResult
+	if issuer == "":
+		if config.backbone_url.strip_edges() == "":
+			return DotResult.fail(
+				DotError.CODE_STATE, "This game has no sign-in service configured."
+			)
+		res = await post_app("auth/ticket", {"address": address})
+		if not res.ok:
+			return res
+	else:
+		var token := await valid_access_token()
+		if not token.ok:
+			return token
+		res = await _http.post_json(
+			issuer.trim_suffix("/") + "/ticket",
+			{"address": address},
+			{"Authorization": "Bearer %s" % token.value}
+		)
+		if not res.ok:
+			return _issuer_refusal(res, "Could not get a connect ticket.")
+	var d: Variant = res.value
+	var ticket := str((d as Dictionary).get("ticket", "")) if d is Dictionary else ""
+	if ticket == "":
+		return DotResult.fail(DotError.CODE_PARSE, "The issuer returned no ticket.")
+	DotLog.debug(CHANNEL, "connect ticket issued", {"address": address})
+	return DotResult.success(ticket)
+
+
 # --- Join tokens ------------------------------------------------------------
 
 ## Whether this client treats the server announcing [param audience] as first-party,

@@ -24,11 +24,13 @@ Four properties make a ticket safe. Dropping any one breaks it:
 | Single-use (`jti` remembered) | `DotAuthServer._spent_tickets` | A ticket captured in flight cannot be used twice inside its window. |
 | Asymmetrically signed (RS256) | `DotJwt` | With HS256 every verifying server could *forge* a ticket for any player. |
 
-`DotAuthConfig.validate()` refuses `TICKET` without a `server_id`, and refuses `ticket_replay_memory_sec <= ticket_ttl_sec`: otherwise a ticket outlives the record of having been spent and is replayable in the gap.
+`DotAuthConfig.validate()` refuses `TICKET` without a `server_id` (unless `adopt_ticket_trust`, below), and refuses `ticket_replay_memory_sec <= ticket_ttl_sec`: otherwise a ticket outlives the record of having been spent and is replayable in the gap.
 
-### The endpoint that does not exist
+### The backbone's own issuer, by dialled address
 
-`DotAuthIssuer` is a standalone service using only existing backbone endpoints (`/api/app/v1/me`), so nothing needs adding to website-city to deploy it. If it is later folded into the backbone, the natural shape is `POST /api/app/v1/auth/ticket` taking `{serverId}` with a bearer access token and returning `{ticket, expiresIn}`, the same contract `DotAuthIssuer` serves. That would remove a hop and let the backbone rate-limit centrally. Not required.
+website-city now issues tickets itself: `POST /api/app/v1/auth/ticket` with a bearer access token and `{address}`, the `host:port` the client **dialled**, answers `{ticket, expiresIn, serverId}`; `GET /api/app/v1/auth/ticket-keys` publishes the public keys by `kid`. The client calls `DotAuthClient.request_ticket_for_address()` (dot-server's client link does, with the address passed to `connect_to_server`). It never asks by the `server_id` a server announced: a hostile server announcing a victim's id would be handed a ticket valid on the victim. `DotAuthIssuer` and `request_ticket(issuer, server_id)` remain for a publisher running its own; `ticket_issuer_url` names that issuer, empty means the backbone's.
+
+A server needs neither an id nor a key file. With `adopt_ticket_trust` it starts in `TICKET` and refuses signed-in joins (`CODE_STATE`) until it has both: the id from `integration/v1/me` once a `backbone` client is handed over, the keys from its own `backbone_url`'s `ticket-keys` over verified HTTPS (plain HTTP only to loopback), kept in `ticket_trust_cache`. An explicit `server_id` or `ticket_public_key` wins. A ticket naming an unknown `kid` is refused and emits `ticket_key_wanted`, which refetches at most once a minute; the ring is also refetched every six hours. A ticket is never verified without an audience, because `DotAuthTicket.verify` accepts any audience when given none. The threat model is website-city's `docs/api/connect-tickets.md`.
 
 ## One seat per account
 

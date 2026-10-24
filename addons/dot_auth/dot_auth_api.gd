@@ -19,5 +19,8 @@ extends RefCounted
 # 6: DotAuthConfig.apply_cfg_file and load_cfg read cfg/addons/dot_auth/auth.yml and the
 #    operator's cfg/server/addons/dot_auth/, with the flat cfg/auth.yml as a shim until 2026-12-31.
 #    Needs dot-core API level 16 (DotAddonConfig.apply_file). Secrets stay file-only.
-const LEVEL := 6
+# 7: connect tickets by dialled address: DotAuthClient.request_ticket_for_address();
+#    DotAuthServer.adopt_ticket_trust(), ticket_trust_ready() and ticket_key_wanted (key
+#    rotation by kid); DotAuthConfig.adopt_ticket_trust, ticket_public_keys, ticket_issuer_url.
+const LEVEL := 7
 const OLDEST := 1
