@@ -51,6 +51,22 @@ func _test_local_profiles() -> void:
 	_section("[b]local profiles[/b]")
 
 	var path := "user://dot_auth_test_profiles.json"
+	var keeper_path := "user://dot_auth_test_profile_client.dat"
+	if not _profiles_store_checks(path):
+		return
+
+	var state: Dictionary = await _profiles_server_checks()
+	_profiles_client_checks(keeper_path, state["issued"])
+	(state["server"] as Node).queue_free()
+
+	DirAccess.remove_absolute(path)
+	DirAccess.remove_absolute(keeper_path)
+	DirAccess.remove_absolute(str(state["path"]))
+	_done()
+
+
+## The store half of the local-profiles section; false when no profile could be made.
+func _profiles_store_checks(path: String) -> bool:
 	DirAccess.remove_absolute(path)
 
 	var store := DotLocalProfiles.at(path)
@@ -60,7 +76,7 @@ func _test_local_profiles() -> void:
 	_check("a profile is created", made.ok, made)
 
 	if not made.ok:
-		return
+		return false
 
 	var id := str((made.value as Dictionary)["id"])
 	var secret := str((made.value as Dictionary)["secret"])
@@ -113,6 +129,12 @@ func _test_local_profiles() -> void:
 		null
 	)
 
+	_profiles_persistence_checks(path, id, secret)
+	return true
+
+
+## Restart survival, the client path from config, and the profile cap.
+func _profiles_persistence_checks(path: String, id: String, secret: String) -> void:
 	# It must survive a restart, or it is a session and not an account.
 	# The CLIENT half's path comes from the config, which nothing read until
 	# for_config existed — every client kept its secrets at the default path
@@ -140,8 +162,9 @@ func _test_local_profiles() -> void:
 		null
 	)
 
-	# --- Through the auth server ------------------------------------------
 
+## The through-the-auth-server half; returns the server, the issued credential and its file.
+func _profiles_server_checks() -> Dictionary:
 	var config := DotAuthConfig.new()
 	config.strategy = DotAuthConfig.Strategy.LOCAL
 	config.local_accounts_path = "user://dot_auth_profile_strategy.json"
@@ -207,6 +230,12 @@ func _test_local_profiles() -> void:
 		null
 	)
 
+	await _profiles_returning_checks(server, issued, signed_up)
+	return {"server": server, "issued": issued, "path": config.local_profiles_path}
+
+
+## A returning join, a forged secret, and credentials naming no provider.
+func _profiles_returning_checks(server: DotAuthServer, issued: Dictionary, signed_up: DotResult) -> void:
 	var returning := await server.authenticate(
 		{"local_profile": {"id": issued["id"], "secret": issued["secret"]}},
 		"peer2"
@@ -234,9 +263,9 @@ func _test_local_profiles() -> void:
 	)
 	_check("other credentials still fall through", not other.ok, null)
 
-	# --- The client half ---------------------------------------------------
 
-	var keeper_path := "user://dot_auth_test_profile_client.dat"
+## The client-side keeper half.
+func _profiles_client_checks(keeper_path: String, issued: Dictionary) -> void:
 	DirAccess.remove_absolute(keeper_path)
 
 	var keeper := DotLocalProfileClient.at(keeper_path)
@@ -275,13 +304,6 @@ func _test_local_profiles() -> void:
 
 	keeper.forget("eu-west-1")
 	_check("forgetting one works", not keeper.has_profile("eu-west-1"), null)
-
-	server.queue_free()
-
-	DirAccess.remove_absolute(path)
-	DirAccess.remove_absolute(keeper_path)
-	DirAccess.remove_absolute(config.local_profiles_path)
-	_done()
 
 
 ## The shape check dot-user-avatar applies to a key, restated for the assertion.
