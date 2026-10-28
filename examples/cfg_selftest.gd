@@ -1,10 +1,7 @@
 extends Node
 
 ## The yml layout of dot-auth's settings: the new path, the flat shim and the operator's layer.
-##
-## [codeblock]
-## timeout 120 godot --headless --path . res://examples/cfg_selftest.tscn
-## [/codeblock]
+## Run: timeout 120 godot --headless --path . res://examples/cfg_selftest.tscn
 
 const FOLDER := "dot_auth"
 const FILE := "auth.yml"

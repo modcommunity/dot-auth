@@ -17,7 +17,7 @@ extends RefCounted
 #    DotAuthConfig.first_party_audiences, join_audience and is_audience();
 #    DotAuthServer.join_audience(). INTROSPECT now carries a join token, never an access token.
 # 6: DotAuthConfig.apply_cfg_file and load_cfg read cfg/addons/dot_auth/auth.yml and the
-#    operator's cfg/server/addons/dot_auth/, with the flat cfg/auth.yml as a shim until 2026-12-31.
+#    operator's cfg/server/addons/dot_auth/, with the flat cfg/auth.yml as a shim until the end of 2026.
 #    Needs dot-core API level 16 (DotAddonConfig.apply_file). Secrets stay file-only.
 # 7: connect tickets by dialled address: DotAuthClient.request_ticket_for_address();
 #    DotAuthServer.adopt_ticket_trust(), ticket_trust_ready() and ticket_key_wanted (key

@@ -1,6 +1,6 @@
 @tool
 class_name DotAuthServer
-extends Node
+extends "res://addons/dot_auth/server/dot_auth_server_local.gd"
 
 ## Decides who a connecting client is. The game server's side of dot-auth.
 ##
@@ -30,8 +30,6 @@ extends Node
 ## [code]dot_server[/code] it finds in [DotRegistry]. See [member session_reporter] for
 ## why here and not in dot-game or dot-server.
 
-const CHANNEL := "auth.server"
-
 ## Registry name dot-server looks for.
 const SERVICE := &"dot_auth_server"
 
@@ -40,20 +38,12 @@ const JOIN_TOKEN_PREFIX := "tmc_jt_"
 
 signal authenticated(identity: DotAuthIdentity)
 signal rejected(reason: String, detail: String)
-## A ticket named a key id this server does not hold: the issuer rotated its key.
-## The host refetches the issuer's keys (from its own backbone, never the client).
-signal ticket_key_wanted(kid: String)
-
 @export_group("Configuration")
-
-@export var config: DotAuthConfig = null
 
 @export var config_file: String = "user://dot_auth_server.json"
 
-## Register in [DotRegistry] on ready.
-##
-## Turn off when running two servers in one process and register scoped names
-## yourself — see [method DotRegistry.register_scoped].
+## Register in [DotRegistry] on ready. Turn off for two servers in one process that
+## register scoped names themselves ([method DotRegistry.register_scoped]).
 @export var register_service: bool = true
 
 ## Build a [DotAuthSessionReporter] when [member DotAuthConfig.session_report_url] is
@@ -97,18 +87,6 @@ var backbone: DotBackboneClient = null:
 ## The audience learnt from the backbone; see [method join_audience].
 var _discovered_audience: String = ""
 
-## How often adopted issuer keys are refetched, and the least time between two fetches
-## an unknown `kid` may cause.
-const TICKET_KEYS_REFRESH_SEC := 900.0
-const TICKET_KEYS_MIN_GAP_MSEC := 60_000
-
-## "config" when auth.yml named the server id (it then wins over the site's).
-var _server_id_source := ""
-var _keys_fetched_msec := -TICKET_KEYS_MIN_GAP_MSEC
-var _keys_fetching := false
-## The site's `refreshSec`, clamped, so a revocation reaches this server in time.
-var _keys_refresh_sec := TICKET_KEYS_REFRESH_SEC
-
 ## How many failed `integration/v1/me` reads [method join_audience] discovery retries,
 ## with backoff capped at 30 s (the default is about an hour).
 var discover_audience_tries: int = 130
@@ -122,23 +100,15 @@ var discover_audience_tries: int = 130
 ## player gets a minute later, so their profile, avatar and bans would split in two.
 var scoped_only: bool = false
 
-var _http: DotHttp = null
 var _limiter: DotRateLimiter = null
-
-## Local accounts, for [constant DotAuthConfig.Strategy.LOCAL].
-var _accounts: Dictionary = {}
 
 ## Spent ticket ids: jti -> expiry unix seconds.
 var _spent_tickets: Dictionary = {}
-
-## Key ids the issuer revoked: never trusted again, kept in the trust cache.
-var _revoked_kids: Dictionary = {}
 
 ## Where [method authenticate] carries the host's connection nonce to the ticket check.
 const CONNECTION_NONCE_KEY := "_connection_nonce"
 var _last_sweep: int = 0
 
-var _started: bool = false
 var _stats := {"ok": 0, "rejected": 0, "guests": 0}
 
 ## Refusals in a row, with no real sign-in between, before the pattern is logged at WARN.
@@ -250,23 +220,9 @@ func start() -> DotResult:
 		if not accounts.ok:
 			return accounts
 
-	# Local profiles are a PROVIDER, not a strategy, so they compose with
-	# whatever the server already does — a server taking backbone tickets can
-	# also let a visitor with no site account make one that lives here. Built
-	# here so `allow_local_profiles` is a switch that does something on its own;
-	# a game wanting to own the store still registers its own provider and
-	# leaves this off.
-	if config.allow_local_profiles and _local_profiles == null:
-		var store := DotLocalProfiles.at(config.local_profiles_path)
-		store.max_profiles = config.max_local_profiles
-
-		_local_profiles = DotLocalProfileProvider.new()
-		_local_profiles.profiles = store
-		_local_profiles.allow_creation = config.local_profile_signup
-
-		var registered := add_provider(_local_profiles)
-		if not registered.ok:
-			return registered.wrap("Could not enable local profiles.")
+	var profiles := _enable_local_profiles()
+	if not profiles.ok:
+		return profiles
 
 	_limiter = DotRateLimiter.new(
 		float(config.auth_attempts_per_minute) / 60.0,
@@ -281,15 +237,7 @@ func start() -> DotResult:
 	_started = true
 
 	if config.adopt_ticket_trust:
-		_load_ticket_trust_cache()
-		ticket_key_wanted.connect(func(_kid: String) -> void: refresh_ticket_keys())
-		refresh_ticket_keys.call_deferred()
-		var t := Timer.new()
-		t.name = "TicketKeysRefresh"
-		t.wait_time = _keys_refresh_sec
-		t.autostart = true
-		t.timeout.connect(func() -> void: refresh_ticket_keys(true))
-		add_child(t)
+		_begin_ticket_trust()
 
 	DotLog.info(
 		CHANNEL,
@@ -303,6 +251,36 @@ func start() -> DotResult:
 	)
 
 	return DotResult.success(self)
+
+
+## Local profiles are a PROVIDER, not a strategy, so they compose with whatever the
+## server already does; built here so `allow_local_profiles` works on its own. A game
+## owning the store registers its own provider and leaves this off.
+func _enable_local_profiles() -> DotResult:
+	if config.allow_local_profiles and _local_profiles == null:
+		var store := DotLocalProfiles.at(config.local_profiles_path)
+		store.max_profiles = config.max_local_profiles
+
+		_local_profiles = DotLocalProfileProvider.new()
+		_local_profiles.profiles = store
+		_local_profiles.allow_creation = config.local_profile_signup
+
+		var registered := add_provider(_local_profiles)
+		if not registered.ok:
+			return registered.wrap("Could not enable local profiles.")
+	return DotResult.success(null)
+
+
+func _begin_ticket_trust() -> void:
+	_load_ticket_trust_cache()
+	ticket_key_wanted.connect(func(_kid: String) -> void: refresh_ticket_keys())
+	refresh_ticket_keys.call_deferred()
+	var t := Timer.new()
+	t.name = "TicketKeysRefresh"
+	t.wait_time = _keys_refresh_sec
+	t.autostart = true
+	t.timeout.connect(func() -> void: refresh_ticket_keys(true))
+	add_child(t)
 
 
 ## The local-profile provider this server built, or null.
@@ -627,9 +605,7 @@ func _authenticate_ticket(credential: Dictionary) -> DotResult:
 	var identity: DotAuthIdentity = d["identity"]
 	_apply_requested_name(identity, credential)
 
-	DotLog.info(
-		CHANNEL, "authenticated by ticket", {"user": identity.label()}
-	)
+	DotLog.info(CHANNEL, "authenticated by ticket", {"user": identity.label()})
 
 	return DotResult.success(identity)
 
@@ -656,229 +632,6 @@ func _check_ticket_binding(ticket_nonce: String, credential: Dictionary) -> DotR
 			"nonce mismatch"
 		)
 	return DotResult.success(null)
-
-
-## True when tickets can be verified: a server id and at least one issuer key.
-func ticket_trust_ready() -> bool:
-	if config == null or config.server_id == "":
-		return false
-	return config.ticket_public_key.strip_edges() != "" \
-		or not config.ticket_public_keys.is_empty()
-
-
-## Adopts the server id and issuer keys ([code]{kid: pem}[/code]) the host fetched from
-## its backbone. An explicit [member DotAuthConfig.server_id] or
-## [member DotAuthConfig.ticket_public_key] wins; only public-key PEMs are taken.
-func adopt_ticket_trust(server_id: String, keys: Dictionary) -> DotResult:
-	if config == null:
-		return DotResult.fail(DotError.CODE_STATE, "No configuration.")
-	var ring := {}
-	for kid in keys:
-		var pem := str(keys[kid])
-		if str(kid) == "" or not pem.contains("BEGIN PUBLIC KEY") or pem.contains("PRIVATE"):
-			return DotResult.fail(
-				DotError.CODE_INVALID, "Issuer keys must be public-key PEMs with a key id."
-			)
-		if not _revoked_kids.has(str(kid)):
-			ring[str(kid)] = pem
-	var sid := server_id.strip_edges()
-	if sid != "" and not sid.is_valid_int():
-		return DotResult.fail(DotError.CODE_INVALID, "A server id is a number.", sid)
-	var pinned := _server_id_source == "config" or (not _started and config.server_id != "")
-	if sid != "" and sid != config.server_id:
-		if pinned:
-			DotLog.warn(CHANNEL, "auth.yml's server_id differs from the site's; keeping auth.yml's", {
-				"configured": config.server_id, "site": sid,
-			})
-		else:
-			config.server_id = sid
-	if not ring.is_empty():
-		config.ticket_public_keys = ring
-	for kid in _revoked_kids:
-		config.ticket_public_keys.erase(kid)
-	_save_ticket_trust_cache()
-	DotLog.info(CHANNEL, "ticket trust adopted", {
-		"server_id": config.server_id,
-		"keys": ",".join(PackedStringArray(config.ticket_public_keys.keys())),
-		"explicit_key": config.ticket_public_key.strip_edges() != "",
-	})
-	return DotResult.success(ticket_trust_ready())
-
-
-## Fetches the issuer's public keys from this server's own backbone
-## (`/api/app/v1/auth/ticket-keys`), never from a client or a dialled server. HTTPS with
-## a verified certificate unless the backbone is on loopback. At most once a minute
-## unless [param force].
-func refresh_ticket_keys(force: bool = false) -> DotResult:
-	if config == null or _http == null:
-		return DotResult.fail(DotError.CODE_STATE, "Not fetching issuer keys now.")
-	if _keys_fetching:
-		while _keys_fetching and is_inside_tree():
-			await get_tree().process_frame
-		return DotResult.success(ticket_trust_ready()) if not config.ticket_public_keys.is_empty() \
-			else DotResult.fail(DotError.CODE_STATE, "The issuer's keys could not be fetched.")
-	if not force and Time.get_ticks_msec() - _keys_fetched_msec < TICKET_KEYS_MIN_GAP_MSEC:
-		return DotResult.fail(DotError.CODE_RATE_LIMITED, "Issuer keys were fetched recently.")
-	var url := config.app_endpoint("auth/ticket-keys")
-	if not _trusted_key_url(url):
-		DotLog.error(CHANNEL, "refusing to fetch issuer keys over plain HTTP", {
-			"url": url, "fix": "an https backbone_url, or issuer_public_key_file",
-		})
-		return DotResult.fail(DotError.CODE_FORBIDDEN, "Issuer keys need HTTPS.", url)
-	_keys_fetching = true
-	_keys_fetched_msec = Time.get_ticks_msec()
-	var res: DotResult = await _http.get_json(url)
-	_keys_fetching = false
-	if not res.ok:
-		DotLog.warn(CHANNEL, "could not fetch the issuer's keys", {
-			"url": url, "why": res.error.message, "have": config.ticket_public_keys.size(),
-		})
-		return res
-	revoke_ticket_keys(parse_ticket_revoked(res.value))
-	_apply_keys_refresh(parse_ticket_refresh_sec(res.value))
-	var ring := parse_ticket_keys(res.value)
-	if ring.is_empty():
-		DotLog.warn(CHANNEL, "the backbone publishes no ticket keys yet", {"url": url})
-		return DotResult.fail(DotError.CODE_STATE, "The site publishes no ticket keys.")
-	return adopt_ticket_trust("", ring)
-
-
-## [code]{kid: pem}[/code] from a `ticket-keys` reply (enveloped or not), RS256 only.
-static func parse_ticket_keys(reply: Variant) -> Dictionary:
-	var ring := {}
-	if not (reply is Dictionary):
-		return ring
-	var body: Dictionary = reply
-	if body.get("data") is Dictionary:
-		body = body["data"]
-	var keys: Variant = body.get("keys")
-	if not (keys is Array):
-		return ring
-	for k in keys:
-		if k is Dictionary and str(k.get("alg", "")) == "RS256" and str(k.get("kid", "")) != "" \
-				and str(k.get("pem", "")).contains("BEGIN PUBLIC KEY") \
-				and not str(k.get("pem", "")).contains("PRIVATE"):
-			ring[str(k["kid"])] = str(k["pem"])
-	return ring
-
-
-## Key ids a `ticket-keys` reply lists under `revoked`.
-static func parse_ticket_revoked(reply: Variant) -> PackedStringArray:
-	var out := PackedStringArray()
-	var body: Variant = reply
-	if body is Dictionary and (body as Dictionary).get("data") is Dictionary:
-		body = body["data"]
-	if body is Dictionary and (body as Dictionary).get("revoked") is Array:
-		for kid in body["revoked"]:
-			if kid is String and kid != "":
-				out.append(kid)
-	return out
-
-
-## The `refreshSec` a `ticket-keys` reply asks for, or 0.
-static func parse_ticket_refresh_sec(reply: Variant) -> float:
-	var body: Variant = reply
-	if body is Dictionary and (body as Dictionary).get("data") is Dictionary:
-		body = body["data"]
-	if body is Dictionary:
-		return _number_of(body, "refreshSec")
-	return 0.0
-
-
-## Never trusts [param kids] again, now or after a restart (the trust cache keeps them).
-func revoke_ticket_keys(kids: PackedStringArray) -> void:
-	var added := PackedStringArray()
-	for kid in kids:
-		if not _revoked_kids.has(kid):
-			_revoked_kids[kid] = true
-			added.append(kid)
-		config.ticket_public_keys.erase(kid)
-	if added.is_empty():
-		return
-	DotLog.warn(CHANNEL, "issuer keys revoked", {"kids": ",".join(added)})
-	_save_ticket_trust_cache()
-
-
-func _apply_keys_refresh(sec: float) -> void:
-	if sec <= 0.0:
-		return
-	_keys_refresh_sec = clampf(sec, 300.0, 6 * 3600.0)
-	var t := get_node_or_null("TicketKeysRefresh") as Timer
-	if t != null and not is_equal_approx(t.wait_time, _keys_refresh_sec):
-		t.wait_time = _keys_refresh_sec
-
-
-static func _trusted_key_url(url: String) -> bool:
-	if url.begins_with("https://"):
-		return true
-	for local in ["http://127.0.0.1", "http://localhost", "http://[::1]"]:
-		if url.begins_with(local + ":") or url.begins_with(local + "/"):
-			return true
-	return false
-
-
-func _load_ticket_trust_cache() -> void:
-	if config.ticket_trust_cache == "" or not FileAccess.file_exists(config.ticket_trust_cache):
-		return
-	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(config.ticket_trust_cache))
-	if not (parsed is Dictionary) or str(parsed.get("backbone_url", "")) != config.backbone_url:
-		return
-	if parsed.get("revoked") is Array:
-		for kid in parsed["revoked"]:
-			if kid is String and kid != "":
-				_revoked_kids[kid] = true
-	var keys: Variant = parsed.get("keys")
-	var adopted := adopt_ticket_trust(
-		str(parsed.get("server_id", "")), keys if keys is Dictionary else {}
-	)
-	if not adopted.ok:
-		DotLog.warn(CHANNEL, "ignoring a bad ticket trust cache", {
-			"path": config.ticket_trust_cache, "why": adopted.error.message,
-		})
-
-
-func _save_ticket_trust_cache() -> void:
-	if config.ticket_trust_cache == "" or not _started:
-		return
-	var f := FileAccess.open(config.ticket_trust_cache, FileAccess.WRITE)
-	if f == null:
-		DotLog.warn(CHANNEL, "could not write the ticket trust cache", {
-			"path": config.ticket_trust_cache, "err": error_string(FileAccess.get_open_error()),
-		})
-		return
-	f.store_string(JSON.stringify({
-		"backbone_url": config.backbone_url,
-		"server_id": config.server_id if _server_id_source != "config" else "",
-		"keys": config.ticket_public_keys,
-		"revoked": _revoked_kids.keys(),
-	}, "\t"))
-	f.close()
-	DotWeb.sync_filesystem()
-
-
-## The PEM to verify [param ticket] with: the explicit key, else the ring entry its
-## `kid` names. An unknown kid asks the host for a refetch and refuses this join.
-func _ticket_key_for(ticket: String) -> DotResult:
-	if config.ticket_public_key.strip_edges() != "":
-		return DotResult.success(config.ticket_public_key)
-	var peeked := DotJwt.peek(ticket)
-	if not peeked.ok:
-		return DotResult.fail(DotError.CODE_AUTH, "This connect ticket is not valid.", "malformed")
-	var kid := str((peeked.value["header"] as Dictionary).get("kid", ""))
-	if _revoked_kids.has(kid):
-		return DotResult.fail(
-			DotError.CODE_FORBIDDEN, "This connect ticket is not valid.", "revoked key id"
-		)
-	if kid == "" and config.ticket_public_keys.size() == 1:
-		return DotResult.success(config.ticket_public_keys.values()[0])
-	if config.ticket_public_keys.has(kid):
-		return DotResult.success(config.ticket_public_keys[kid])
-	ticket_key_wanted.emit(kid)
-	return DotResult.fail(
-		DotError.CODE_STATE,
-		"This server is updating its sign-in keys. Try again in a moment.",
-		"unknown ticket key id %s" % kid.substr(0, 24)
-	)
 
 
 ## Resolves what an INTROSPECT client sent.
@@ -1013,179 +766,6 @@ func _authenticate_introspect_scoped(token: String, credential: Dictionary) -> D
 	return DotResult.success(identity)
 
 
-## Checks a username and password against the local accounts file.
-func _authenticate_local(credential: Dictionary) -> DotResult:
-	var username := str(credential.get("username", "")).to_lower()
-	var password := str(credential.get("password", ""))
-
-	if username == "" or password == "":
-		return DotResult.fail(
-			DotError.CODE_AUTH, "A username and password are required."
-		)
-
-	if not _accounts.has(username):
-		# The same message and the same work as a wrong password, so the response
-		# does not reveal which usernames exist. The hash runs either way.
-		DotHash.sha256_text(password)
-		return DotResult.fail(
-			DotError.CODE_AUTH, "Incorrect username or password."
-		)
-
-	var account: Dictionary = _accounts[username]
-	var salt := str(account.get("salt", ""))
-	var expected := str(account.get("hash", ""))
-	var actual := hash_password(password, salt)
-
-	if not DotHash.constant_time_equal_hex(actual, expected):
-		return DotResult.fail(
-			DotError.CODE_AUTH, "Incorrect username or password."
-		)
-
-	var identity := DotAuthIdentity.new()
-	identity.provider = "local"
-	identity.provider_id = username
-	identity.uid = "local:%s" % username
-	identity.username = username
-	identity.display_name = str(account.get("display_name", username))
-	identity.role = str(account.get("role", ""))
-	identity.authenticated_at = int(Time.get_unix_time_from_system())
-
-	if account.get("claims") is Dictionary:
-		identity.claims = account["claims"]
-
-	_apply_requested_name(identity, credential)
-
-	DotLog.info(
-		CHANNEL, "authenticated locally", {"user": identity.label()}
-	)
-
-	return DotResult.success(identity)
-
-
-func _make_guest(credential: Dictionary) -> DotResult:
-	var device_id := str(credential.get("device_id", ""))
-	if device_id == "":
-		# Random rather than derived: without a device id there is nothing stable
-		# to derive from, and a shared constant would make every guest the same
-		# person as far as mutes and kicks are concerned.
-		device_id = DotHash.random_hex(8)
-
-	var name := str(credential.get("name", ""))
-	var identity := DotAuthIdentity.guest(
-		DotHash.sha256_text(device_id).substr(0, 16), name
-	)
-
-	return DotResult.success(identity)
-
-
-## Applies a client-requested display name, when the identity has none of its own.
-##
-## A guest may name themselves; an authenticated player may not. Letting a signed-in
-## account display an arbitrary name is how impersonation happens, and the account
-## name is the one thing a server can vouch for.
-func _apply_requested_name(
-	identity: DotAuthIdentity,
-	credential: Dictionary
-) -> void:
-	var requested := str(credential.get("name", "")).strip_edges()
-	if requested == "":
-		return
-
-	if not identity.is_guest:
-		return
-
-	identity.display_name = requested.substr(0, 64)
-
-
-# --- Local accounts --------------------------------------------------------
-
-## Salted SHA-256 of a password.
-##
-## [b]Not adequate for a public account system.[/b] A password store deserves
-## argon2 or bcrypt, and Godot ships neither. This exists for LAN servers and
-## development, where the alternative is a plaintext password in a JSON file.
-## Anything with real users belongs on the backbone, which does this properly.
-static func hash_password(password: String, salt: String) -> String:
-	var out := salt + password
-	# A few thousand rounds is not key stretching in any serious sense, but it
-	# does make an offline attack against this file cost something.
-	for _i in range(4096):
-		out = DotHash.sha256_text(out)
-	return out
-
-
-func _load_accounts() -> DotResult:
-	_accounts.clear()
-
-	if not FileAccess.file_exists(config.local_accounts_path):
-		DotLog.info(
-			CHANNEL,
-			"no local accounts file; nobody can sign in with LOCAL",
-			{"path": config.local_accounts_path}
-		)
-		return DotResult.success(0)
-
-	var read := DotPaths.read_json(config.local_accounts_path)
-	if not read.ok:
-		return read.wrap("Could not read the local accounts file.")
-
-	var data: Variant = read.value
-	if not (data is Dictionary):
-		return DotResult.fail(
-			DotError.CODE_PARSE,
-			"The accounts file must be a JSON object of username -> account."
-		)
-
-	for username in (data as Dictionary):
-		var entry: Variant = (data as Dictionary)[username]
-		if entry is Dictionary:
-			_accounts[str(username).to_lower()] = entry
-
-	DotLog.info(
-		CHANNEL, "local accounts loaded", {"count": _accounts.size()}
-	)
-
-	return DotResult.success(_accounts.size())
-
-
-## Adds or replaces a local account and writes the file.
-##
-## For an admin console command. Never expose it to unauthenticated clients.
-func upsert_local_account(
-	username: String,
-	password: String,
-	display_name: String = "",
-	role: String = ""
-) -> DotResult:
-	var salt := DotHash.random_hex(16)
-
-	_accounts[username.to_lower()] = {
-		"salt": salt,
-		"hash": hash_password(password, salt),
-		"display_name": display_name if display_name != "" else username,
-		"role": role,
-	}
-
-	var written := DotPaths.write_json(
-		config.local_accounts_path, _accounts
-	)
-	if not written.ok:
-		return written
-
-	DotLog.info(CHANNEL, "local account saved", {"user": username})
-	return DotResult.success(username)
-
-
-func remove_local_account(username: String) -> DotResult:
-	if not _accounts.erase(username.to_lower()):
-		return DotResult.fail(
-			DotError.CODE_INVALID, "No such account.", username
-		)
-	return DotPaths.write_json(config.local_accounts_path, _accounts)
-
-
-# --- Replay memory ---------------------------------------------------------
-
 ## Forgets ticket ids that have expired anyway.
 ##
 ## Bounded by [member DotAuthConfig.ticket_replay_memory_sec], which config
@@ -1278,10 +858,6 @@ func _warn_about_hostname(h: Variant) -> void:
 			"fix": "enroll the server again from the host that answers at that name",
 		})
 
-
-static func _number_of(d: Dictionary, key: String) -> float:
-	var v: Variant = d.get(key, 0)
-	return float(v) if (v is int or v is float) else 0.0
 
 
 ## The backbone's `code` from a failed integration call's JSON body, or "".

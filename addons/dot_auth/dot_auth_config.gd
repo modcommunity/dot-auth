@@ -11,10 +11,9 @@ extends DotConfig
 
 ## How a game server decides who a connecting client is.
 enum Strategy {
-	## The client presents a short-lived, server-scoped ticket signed by an
-	## issuer the server trusts. The server verifies it offline against a public
-	## key: no network call per join, and the player's account token never
-	## reaches the game server. [b]The right choice for public servers.[/b]
+	## The client presents a short-lived, server-scoped ticket signed by a trusted issuer,
+	## verified offline against a public key: no per-join network call, and the account
+	## token never reaches the game server. [b]The right choice for public servers.[/b]
 	TICKET,
 	## The client sends a single-use JOIN TOKEN minted for this server, and the
 	## server redeems it at the backbone's `player/introspect` with its own
@@ -407,20 +406,9 @@ func validate() -> DotResult:
 					"LOCAL authentication needs local_accounts_path."
 				)
 
-	for entry in first_party_audiences:
-		if not is_audience(entry):
-			return DotResult.fail(
-				DotError.CODE_INVALID,
-				"first_party_audiences entries must look like server:<id> or app:<id>.",
-				"got %s" % entry
-			)
-
-	if join_audience != "" and not is_audience(join_audience):
-		return DotResult.fail(
-			DotError.CODE_INVALID,
-			"join_audience must look like server:<id> or app:<id>.",
-			"got %s" % join_audience
-		)
+	var audiences := _validate_audiences()
+	if not audiences.ok:
+		return audiences
 
 	if ticket_replay_memory_sec <= ticket_ttl_sec:
 		return DotResult.fail(
@@ -455,6 +443,24 @@ func validate() -> DotResult:
 			"a roster has to say which server it is the roster of"
 		)
 
+	return DotResult.success(null)
+
+
+func _validate_audiences() -> DotResult:
+	for entry in first_party_audiences:
+		if not is_audience(entry):
+			return DotResult.fail(
+				DotError.CODE_INVALID,
+				"first_party_audiences entries must look like server:<id> or app:<id>.",
+				"got %s" % entry
+			)
+
+	if join_audience != "" and not is_audience(join_audience):
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"join_audience must look like server:<id> or app:<id>.",
+			"got %s" % join_audience
+		)
 	return DotResult.success(null)
 
 
