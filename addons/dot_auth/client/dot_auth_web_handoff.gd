@@ -9,7 +9,7 @@ extends RefCounted
 # matters is the auth client's decision, and it is the one that logs how a player
 # signed in. Nothing here can fail against anything but a page that did not publish.
 
-## The global the embedding page parks the block on.
+## The global the embedding page parks the block on; never the query string, where a credential reaches history, referrers and logs.
 const GLOBAL := "__TMC_AUTH__"
 
 

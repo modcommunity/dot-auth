@@ -678,6 +678,7 @@ func _report_for_server(
 		err.retry_after = _limiter.retry_after("server:" + server_id)
 		return DotResult.failure(err)
 
+	# Key first, before the roster is read: an unauthenticated report must not confirm or free a session.
 	if not authorize_server(server_id, key):
 		DotLog.warn(
 			CHANNEL,
