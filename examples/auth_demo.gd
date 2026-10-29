@@ -46,6 +46,8 @@ func _ready() -> void:
 
 
 func _run() -> void:
+	# The loopback stubs answer from this thread, so the client's reads must not wait on it.
+	ProjectSettings.set_setting("dot/http/use_threads", true)
 	_line("[b]dot-auth self-test[/b]")
 	_line("")
 

@@ -41,12 +41,8 @@ func _line(text: String) -> void:
 
 
 ## Accounts that live on one server and never reach a backbone.
-##
-## Every check here is about the property that makes them worth having rather than
-## dangerous: **the server issues the credential**. A test that only proved "a
-## profile can be created and read back" would pass just as happily against the
-## design where the client asserts its own identity, which is the design this
-## replaces.
+## Every check targets one property: **the server issues the credential**. A
+## create-and-read-back test would pass against a client-asserted identity too.
 func _test_local_profiles() -> void:
 	_section("[b]local profiles[/b]")
 
@@ -136,9 +132,7 @@ func _profiles_store_checks(path: String) -> bool:
 ## Restart survival, the client path from config, and the profile cap.
 func _profiles_persistence_checks(path: String, id: String, secret: String) -> void:
 	# It must survive a restart, or it is a session and not an account.
-	# The CLIENT half's path comes from the config, which nothing read until
-	# for_config existed — every client kept its secrets at the default path
-	# whatever the config said.
+	# The CLIENT half's path comes from the config, not the default.
 	var client_config := DotAuthConfig.new()
 	client_config.local_profile_client_path = path + ".client"
 	var client_store := DotLocalProfileClient.for_config(client_config)
@@ -188,10 +182,8 @@ func _profiles_server_checks() -> Dictionary:
 		null
 	)
 
-	# MUTATED, never reassigned. A GDScript lambda captures by value, so
-	# `issued = {...}` inside one rebinds the captured copy and the outer
-	# dictionary stays empty — the signal looks as though it never fired.
-	# Mutating works because a Dictionary is a reference.
+	# MUTATED, never reassigned: a lambda captures by value, so reassigning leaves
+	# the outer dictionary empty, while a Dictionary mutation is seen outside.
 	var issued := {}
 	server.local_profiles().profile_created.connect(
 		func(new_id: String, new_secret: String, _name: String) -> void:
@@ -307,10 +299,8 @@ func _profiles_client_checks(keeper_path: String, issued: Dictionary) -> void:
 
 
 ## The shape check dot-user-avatar applies to a key, restated for the assertion.
-##
-## dot-auth does not depend on dot-user-avatar, so this cannot call
-## `DotAvatarKey.is_usable` — and that is exactly the interoperation being checked:
-## two addons that never import each other agree on what a player key looks like.
+## dot-auth cannot call `DotAvatarKey.is_usable`; that two addons which never
+## import each other agree on a key's shape is what is checked.
 class DotAvatarKeyShape:
 	static func is_usable(key: String) -> bool:
 		if key.length() < 8 or key.length() > 64:
@@ -331,13 +321,10 @@ class DotAvatarKeyShape:
 		return true
 
 
-# --- Single session --------------------------------------------------------
 
 
 ## RSA keypair via dot-core's Crypto wrapper.
-##
-## Named oddly to avoid colliding with a dot-cloud class this project does not
-## have; it is only a local helper.
+## Named oddly to avoid colliding with a dot-cloud class; only a local helper.
 func DotCloudKeys_generate() -> Dictionary:
 	var crypto := Crypto.new()
 	var key := crypto.generate_rsa(2048)
@@ -350,9 +337,7 @@ func DotCloudKeys_generate() -> Dictionary:
 
 
 ## Index of [param needle] in [param haystack], or -1.
-##
-## PackedByteArray has no find() for subsequences, and searching decoded text is
-## not equivalent — see the caller.
+## PackedByteArray has no subsequence find(), and searching decoded text differs.
 func _find_bytes(haystack: PackedByteArray, needle: PackedByteArray) -> int:
 	if needle.is_empty() or needle.size() > haystack.size():
 		return -1

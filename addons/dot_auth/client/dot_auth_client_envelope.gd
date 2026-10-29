@@ -5,9 +5,7 @@ extends Node
 
 
 ## The app API's `{ok, data}` envelope, whatever `data` is.
-##
-## [method _unwrap] knows the sign-in shapes; a stats or a scope-key reply is
-## a plain object it would refuse for lacking a token, which is not a failure.
+## Unlike [method _unwrap], it accepts replies with no token (stats, scope keys).
 func _unwrap_any(response: Variant) -> DotResult:
 	if not (response is Dictionary):
 		return DotResult.fail(
@@ -76,10 +74,7 @@ func _unwrap(response: Variant) -> DotResult:
 
 
 ## The backbone's error `code` from a failed request, or [code]""[/code].
-##
-## Its handler puts the machine-readable code in the JSON body even for non-2xx
-## responses, and [DotHttp] keeps that body as the error's detail — so the code is
-## recoverable without a second request.
+## It rides in the body of non-2xx replies, which [DotHttp] keeps as the detail.
 func _envelope_code(res: DotResult) -> String:
 	if res.ok:
 		return ""

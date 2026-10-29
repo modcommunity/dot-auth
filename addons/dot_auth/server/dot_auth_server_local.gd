@@ -73,10 +73,8 @@ func _make_guest(credential: Dictionary) -> DotResult:
 
 
 ## Applies a client-requested display name, when the identity has none of its own.
-##
-## A guest may name themselves; an authenticated player may not. Letting a signed-in
-## account display an arbitrary name is how impersonation happens, and the account
-## name is the one thing a server can vouch for.
+## Only guests may name themselves: a signed-in player showing an arbitrary name is
+## impersonation, and the account name is all a server can vouch for.
 func _apply_requested_name(
 	identity: DotAuthIdentity,
 	credential: Dictionary
@@ -91,14 +89,10 @@ func _apply_requested_name(
 	identity.display_name = requested.substr(0, 64)
 
 
-# --- Local accounts --------------------------------------------------------
 
 ## Salted SHA-256 of a password.
-##
-## [b]Not adequate for a public account system.[/b] A password store deserves
-## argon2 or bcrypt, and Godot ships neither. This exists for LAN servers and
-## development, where the alternative is a plaintext password in a JSON file.
-## Anything with real users belongs on the backbone, which does this properly.
+## [b]Not adequate for a public account system[/b] (Godot ships no argon2 or bcrypt);
+## it is for LAN and development. Real users belong on the backbone.
 static func hash_password(password: String, salt: String) -> String:
 	var out := salt + password
 	# A few thousand rounds is not key stretching in any serious sense, but it

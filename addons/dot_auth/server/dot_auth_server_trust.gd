@@ -81,9 +81,8 @@ func adopt_ticket_trust(server_id: String, keys: Dictionary) -> DotResult:
 
 
 ## Fetches the issuer's public keys from this server's own backbone
-## (`/api/app/v1/auth/ticket-keys`), never from a client or a dialled server. HTTPS with
-## a verified certificate unless the backbone is on loopback. At most once a minute
-## unless [param force].
+## (`/api/app/v1/auth/ticket-keys`), never from a client. HTTPS unless loopback;
+## at most once a minute unless [param force].
 func refresh_ticket_keys(force: bool = false) -> DotResult:
 	if config == null or _http == null:
 		return DotResult.fail(DotError.CODE_STATE, "Not fetching issuer keys now.")
