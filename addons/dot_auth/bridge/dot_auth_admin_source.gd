@@ -4,35 +4,11 @@ extends Resource
 
 ## Turns backbone identity into dot-server admin permissions.
 ##
-## The bridge between "who is this player, according to the site" and "what may
-## they do on this server". Without it, every server operator maintains a
-## hand-edited list of user ids; with it, "everyone in the site group
-## [code]moderators[/code] can kick here" is one mapping rule.
-##
-## [b]Deliberately duck-typed.[/b] dot-auth does not depend on dot-server and
-## dot-server does not depend on dot-auth — either works alone. dot-server looks
-## for an object with [method lookup] and calls it; this satisfies that contract
-## without either addon importing the other's classes.
-##
-## [b]Site roles are not server roles.[/b] [member role_flags] is empty by
-## default, and that is not an oversight: a site moderator is not automatically an
-## admin on every community server running this addon, and shipping that default
-## would hand anyone with a site role control of every server. Map roles only where
-## the server operator and the site are the same people.
+## Duck-typed (dot-server calls [method lookup]) so neither addon imports the other. [member role_flags] is empty by default on purpose: a site role must not grant control of every server running this addon.
 
 const CHANNEL := "auth.admin"
 
-## Maps a site group name to permission flags granted on this server.
-##
-## Group names come from the identity's [code]groups[/code] claim, which the
-## backbone populates.
-##
-## [codeblock]
-## group_flags = {
-##     "moderators": ["kick", "mute", "chat"],
-##     "admins": ["kick", "ban", "changemap", "cvar"],
-## }
-## [/codeblock]
+## Maps a site group name to permission flags, from the identity's [code]groups[/code] claim, e.g. [code]{"moderators": ["kick", "mute"]}[/code].
 @export var group_flags: Dictionary = {}
 
 ## Maps a site-wide role to permission flags. Empty by default — see the class doc.
@@ -43,36 +19,22 @@ const CHANNEL := "auth.admin"
 ## For entitlement-style permissions: a supporter claim granting a reserved slot.
 @export var claim_flags: Dictionary = {}
 
-## Flags granted to every authenticated (non-guest) player.
-##
-## For servers where being signed in is itself a privilege — a reserved slot, or
-## the ability to speak in chat.
+## Flags granted to every authenticated (non-guest) player, for servers where being signed in is a privilege.
 @export var authenticated_flags: PackedStringArray = PackedStringArray()
 
-## Explicit per-user grants, as [code]uid -> [flags][/code].
-##
-## Escape hatch for "this one person, on this one server". Keyed on
-## [member DotAuthIdentity.uid], never on a display name.
+## Explicit per-user grants, as [code]uid -> [flags][/code]; keyed on [member DotAuthIdentity.uid], never on a display name.
 @export var user_flags: Dictionary = {}
 
-## Immunity by group, as [code]group -> level[/code].
-##
-## Higher immunity cannot be kicked, banned or muted by lower. The same rule every
-## admin system converges on, because the problem is the same: without it two admins can kick each other in a
-## loop and the server has no way to say who wins.
+## Immunity by group, as [code]group -> level[/code]; higher immunity cannot be kicked, banned or muted by lower.
 @export var group_immunity: Dictionary = {}
 
 ## Immunity granted to any authenticated player.
 @export var base_immunity: int = 0
 
 
-## Resolves an identity to admin permissions.
+## Resolves an identity to admin permissions, the method dot-server calls.
 ##
-## The method dot-server calls. Returns a [DotResult] carrying
-## [code]{flags: PackedStringArray, immunity: int, source: String}[/code], or a
-## failure when this source has nothing to say — which is not an error, and
-## dot-server treats it as "no permissions from here" and moves on to its other
-## sources.
+## Returns [code]{flags, immunity, source}[/code], or a failure when this source has nothing to say, which dot-server reads as "no permissions from here", not an error.
 func lookup(identity: DotAuthIdentity) -> DotResult:
 	if identity == null or not identity.is_valid():
 		return DotResult.fail(

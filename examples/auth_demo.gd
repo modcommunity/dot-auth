@@ -1,28 +1,8 @@
 extends "res://examples/auth_demo_base.gd"
 
-## Exercises the parts of dot-auth that can be tested without a backbone.
+## Exercises the parts of dot-auth that can be tested without a backbone (the device flow needs a human clicking Approve).
 ##
-## The device flow needs a live backbone and a human clicking Approve, so it is
-## not covered here. Everything security-critical is:
-##
-## - ticket minting and offline verification;
-## - audience scoping — a ticket for server A refused by server B;
-## - replay refusal — the same ticket presented twice;
-## - connection binding — a copied ticket refused on another connection;
-## - issuer key rotation overlap and revocation;
-## - expiry, and clock-skew leeway;
-## - tamper detection on the payload;
-## - algorithm confusion — an HS256 token offered where RS256 is expected;
-## - PKCE challenge derivation;
-## - local accounts, with a wrong password and an unknown user;
-## - the admin-source mapping from site groups to server flags;
-## - token-store round trip through encryption;
-## - one seat per account — a ticket refused while the player is on another
-##   server, and every way a session ends, including over a real socket.
-##
-## [codeblock]
-## godot --headless --path . res://examples/auth_demo.tscn
-## [/codeblock]
+## Covers ticket minting and offline verification, audience scoping, replay, connection binding, key rotation and revocation, expiry and skew, tampering, algorithm confusion, PKCE, local accounts, admin mapping, the token store, and one seat per account. Run: examples/auth_demo.tscn.
 
 const SERVER_A := "eu-west-1"
 const SERVER_B := "us-east-2"
@@ -89,15 +69,8 @@ func _run() -> void:
 	_finish()
 
 
-# --- The registry ----------------------------------------------------------
 
-## A backbone client publishes itself, so a consumer can find one it was not handed.
-##
-## [b]This is the shape that cost `DotCloudClient` four call sites.[/b] It went
-## unregistered and every consumer found null — and none of them errored, because "no
-## client" is a legitimate configuration and therefore indistinguishable from the bug.
-## A chat relay or a stats reporter built during module load exists BEFORE any host
-## could assign one, so being findable is the only way it is reachable at all.
+## A backbone client publishes itself, so a consumer can find one it was not handed (a consumer built during module load exists before any host could assign one).
 func _test_backbone_registry() -> void:
 	_line("")
 	_section("[b]the registry[/b]")
@@ -130,11 +103,8 @@ func _test_backbone_registry() -> void:
 	_done()
 
 
-# --- The app API's refusals ---------------------------------------------------
 
-## website-city refuses flat: `{ok: false, code, message, retryAfter?}`. This used to read
-## only a nested `error` object the site never sends, so every refusal through
-## post_app/get_app came back as the fallback text with the site's code thrown away.
+## website-city refuses flat: `{ok: false, code, message, retryAfter?}`; the site's code must survive through post_app/get_app, not the fallback text.
 func _test_app_refusal() -> void:
 	_line("")
 	_section("[b]app API refusals[/b]")
@@ -157,13 +127,9 @@ func _test_app_refusal() -> void:
 	_done()
 
 
-## A launcher's sign-in code, redeemed at the client's OWN backbone.
+## A launcher's sign-in code, redeemed at the client's OWN backbone (the native twin of the page handoff).
 ##
-## The native twin of the page handoff (`redeem_handoff`). A loopback stub stands in for
-## the site's `/api/app/v1/auth/handoff`: it answers the one good code once and refuses
-## anything else the way the site does (400 `invalid_grant`, one answer for unknown,
-## expired and spent). Armed by: posting to a launcher-named URL (the path check fails),
-## and skipping the empty-code guard (a request is counted).
+## A loopback stub answers the one good code once and refuses others like the site (400 `invalid_grant`). Armed by: posting to a launcher-named URL, and skipping the empty-code guard.
 func _test_launcher_handoff() -> void:
 	_line("")
 	_section("[b]launcher handoff[/b]")
@@ -209,11 +175,9 @@ func _test_launcher_handoff() -> void:
 	_done()
 
 
-## Ticket trust adopted at runtime: the server id from `integration/v1/me`, the issuer
-## keys from the backbone's `ticket-keys` (a loopback stub), selected by `kid`, cached;
-## and the client asking for a ticket by the address it dialled. Armed by: verifying with
-## an empty audience (the before-adoption join is accepted), or ignoring `kid` (the
-## unknown-key join verifies against the wrong key and fails with INTEGRITY, not STATE).
+## Ticket trust adopted at runtime: server id from `integration/v1/me`, issuer keys from `ticket-keys` (a loopback stub) selected by `kid`, and tickets requested by the dialled address.
+##
+## Armed by: verifying with an empty audience, or ignoring `kid`.
 func _test_ticket_trust(keys: Dictionary) -> void:
 	_line("")
 	_section("[b]ticket trust by address[/b]")
@@ -602,7 +566,6 @@ func _test_scoped_introspect() -> void:
 	_done()
 
 
-# --- Tickets ---------------------------------------------------------------
 
 func _test_tickets(keys: Dictionary) -> void:
 	_section("[b]connect tickets[/b]")
@@ -778,7 +741,6 @@ func _test_tickets(keys: Dictionary) -> void:
 	_done()
 
 
-# --- PKCE ------------------------------------------------------------------
 
 func _test_pkce() -> void:
 	_section("[b]PKCE[/b]")
@@ -815,7 +777,6 @@ func _test_pkce() -> void:
 	_done()
 
 
-# --- Local accounts --------------------------------------------------------
 
 func _test_local_accounts() -> void:
 	_section("[b]local accounts[/b]")
@@ -885,12 +846,8 @@ func _test_local_accounts() -> void:
 	_done()
 
 
-# --- Refusals are logged ----------------------------------------------------
 
-## The server used to count a refusal and emit a signal and say nothing, so "why can I not
-## get in" had no answer in the server's own log. Each refusal is now logged at the level
-## of whoever has to act: the player's at INFO, the limiter's at DEBUG, a verifier that is
-## down at WARN once, and a long run of refusals with nobody getting in at WARN once.
+## Each refusal is logged at the level of whoever has to act: the player's at INFO, the limiter's at DEBUG, a down verifier at WARN once, a long run with nobody getting in at WARN once.
 func _test_refusals_are_logged() -> void:
 	_section("[b]refusals are logged[/b]")
 
@@ -1001,7 +958,6 @@ func _test_refusals_are_logged() -> void:
 	_done()
 
 
-# --- Admin source ----------------------------------------------------------
 
 func _test_admin_source() -> void:
 	_section("[b]admin mapping[/b]")
@@ -1073,7 +1029,6 @@ func _test_admin_source() -> void:
 	_done()
 
 
-# --- Token store -----------------------------------------------------------
 
 func _test_token_store() -> void:
 	_section("[b]token store[/b]")
@@ -1199,7 +1154,6 @@ func _test_providers() -> void:
 	_done()
 
 
-# --- Helpers ---------------------------------------------------------------
 
 func _finish() -> void:
 	if DotPlatform.is_headless():
@@ -1208,14 +1162,9 @@ func _finish() -> void:
 
 
 
-## One account, one seat.
+## One account, one seat, with every way a session can end: server report, player release, lease expiry.
 ##
-## The issuer is the only participant that sees every server, so the rule lives
-## there, and every way a session can end is exercised: the server reporting the
-## player gone, the player releasing it, and the lease running out. The roster
-## path runs over a real socket through the issuer's own listener, because the
-## endpoint is the one part of this a unit call cannot reach — and the family's
-## record says the bug is always in the part nothing ran.
+## The roster path runs over a real socket through the issuer's own listener, the one part a unit call cannot reach.
 func _test_single_session(keys: Dictionary) -> void:
 	_section("[b]single session[/b]")
 
@@ -1228,7 +1177,6 @@ func _test_single_session(keys: Dictionary) -> void:
 	ada.provider_id = "ada"
 	ada.display_name = "Ada"
 
-	# --- Configuration invariants ------------------------------------------
 
 	var bad := DotAuthConfig.new()
 	bad.strategy = DotAuthConfig.Strategy.ANONYMOUS
@@ -1251,7 +1199,6 @@ func _test_single_session(keys: Dictionary) -> void:
 		null
 	)
 
-	# --- The issuer --------------------------------------------------------
 
 	var config := DotAuthConfig.new()
 	config.issuer_private_key = str(keys["private"])
@@ -1392,7 +1339,6 @@ func _test_single_session(keys: Dictionary) -> void:
 	issuer.release_session(ada.uid)
 	config.single_session = true
 
-	# --- Over the socket ---------------------------------------------------
 
 	if not listening:
 		_line("  (port %d is in use; the socket half was not run)" % PORT)

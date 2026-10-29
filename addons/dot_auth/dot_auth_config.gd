@@ -2,12 +2,7 @@
 class_name DotAuthConfig
 extends DotConfig
 
-## Everything configurable about authentication, on both sides.
-##
-## Layered like every [DotConfig]: exported defaults, then a JSON file, then
-## [code]DOT_AUTH_*[/code] environment variables, then [code]--auth-*[/code]
-## arguments. Secrets are refused from the environment and argv — see
-## [method sensitive_keys].
+## Everything configurable about authentication, on both sides, layered like every [DotConfig]; secrets are refused from environment and argv ([method sensitive_keys]).
 
 ## How a game server decides who a connecting client is.
 enum Strategy {
@@ -15,16 +10,9 @@ enum Strategy {
 	## verified offline against a public key: no per-join network call, and the account
 	## token never reaches the game server. [b]The right choice for public servers.[/b]
 	TICKET,
-	## The client sends a single-use JOIN TOKEN minted for this server, and the
-	## server redeems it at the backbone's `player/introspect` with its own
-	## integration credential (see [member DotAuthServer.backbone]).
+	## The client sends a single-use JOIN TOKEN minted for this server, which the server redeems at the backbone's `player/introspect`.
 	##
-	## [b]Only for first-party servers, and now enforced by the client.[/b] A client
-	## takes part only when this server's [member join_audience] is in its own
-	## [member first_party_audiences]; otherwise it offers a ticket or refuses to
-	## join, and it never sends its account access token. The backbone refuses a
-	## device access token here too, so an older client is told to update rather
-	## than leaking a credential. Adds a backbone round trip to every join.
+	## First-party servers only, enforced by the client: it joins this way only when [member join_audience] is in its [member first_party_audiences], and never sends its access token. Adds a backbone round trip per join.
 	INTROSPECT,
 	## Accounts defined in a file on the server. No backbone involved.
 	LOCAL,
@@ -34,60 +22,25 @@ enum Strategy {
 
 @export_group("Backbone")
 
-## Base URL of the website-city backbone.
+## Base URL of the website-city backbone (the site is `moddingcommunity.com`).
 ##
-## [b]The default is a real domain and that is a security property, not tidiness.[/b]
-## This was `https://themodcommunity.com` — which is not TMC's domain and, at the time
-## it was found, was **not registered to anybody**. Every deployment that did not
-## override it pointed its device-code grant at a name any stranger could buy, and the
-## thing sent there is the start of an authentication flow. It failed loudly only
-## because the name did not resolve; the day somebody registered it, it would have
-## started failing quietly instead, which is the worse of the two.
-##
-## The site is `moddingcommunity.com`. Nothing in website-city has ever used any other
-## name, so the wrong one came from here and travelled outward into three READMEs.
-##
-## Override it per deployment: it is an ordinary [DotConfig] field, so
-## `DOT_AUTH_BACKBONE_URL`, `--auth-backbone-url` and a JSON file all set it, layered in
-## that order. A browser build has neither an environment nor an argv, so a web client
-## is told through the JSON file its build ships with — see dot-server-deploy's
-## `client/auth.json`. It is deliberately NOT read from the page's query string: this
-## URL decides where a single-use sign-in code is redeemed, and a link that could point
-## that at another host would be a credential-forwarding link.
+## The default is a real domain as a security property: an unregistered name any stranger could buy would receive the start of an authentication flow. Never read from a page's query string: it decides where a sign-in code is redeemed, so that would be a credential-forwarding link. Web clients get it from the build's JSON file.
 @export var backbone_url: String = "https://moddingcommunity.com"
 
-## The servers this client treats as FIRST-PARTY: the only ones it will join under
-## [constant Strategy.INTROSPECT].
+## The servers this client treats as FIRST-PARTY: the only ones it joins under [constant Strategy.INTROSPECT]. Empty means none (a ticket or a refusal instead).
 ##
-## Each entry is a backbone integration target, `server:<id>` or `app:<id>` — the
-## [member join_audience] such a server announces in its handshake. The client mints a
-## single-use join token for exactly that audience (`POST /api/app/v1/play/join-token`)
-## and sends that, never its access token. A server that claims somebody else's
-## audience gains nothing: the token can only be redeemed by the credential the
-## audience names. Empty, the default, means no server is first-party, and an
-## INTROSPECT server gets a ticket (when an issuer is configured) or a refusal.
-##
-## A client-side setting the server cannot influence: ship it in the build's config.
+## Entries are `server:<id>` or `app:<id>`, the [member join_audience] a server announces. The join token is redeemable only by the credential its audience names, so a server claiming another's audience gains nothing. Client-side: ship it in the build's config.
 @export var first_party_audiences: PackedStringArray = PackedStringArray()
 
-## Client name shown on the backbone's device-approval screen.
-##
-## Untrusted by the backbone and purely a label, but the label is what the player
-## reads before approving, so make it the game's actual name.
+## Client name shown on the backbone's device-approval screen; a label the backbone does not trust but the player reads, so use the game's name.
 @export var client_name: String = "dot game"
 
 @export var client_version: String = "0.1.0"
 
-## Seconds between device-code polls when the backbone suggests nothing.
-##
-## The backbone returns an `interval` and a `slow_down` code; both are honoured
-## over this. Polling faster than told is how a client gets its grant burned.
+## Seconds between device-code polls when the backbone suggests nothing; its `interval` and `slow_down` win, as polling faster burns the grant.
 @export_range(1.0, 60.0, 1.0) var device_poll_interval_sec: float = 5.0
 
-## Give up on an unapproved device login after this long.
-##
-## The backbone's own grant TTL is 10 minutes; going past it only produces
-## `expired_token` responses.
+## Give up on an unapproved device login after this long (the backbone's grant TTL is 10 minutes).
 @export_range(30.0, 1800.0, 30.0) var device_timeout_sec: float = 600.0
 
 @export_group("Token storage")
@@ -95,18 +48,10 @@ enum Strategy {
 ## Where the client keeps its refresh token.
 @export var token_store_path: String = "user://dot_auth_tokens.dat"
 
-## Encrypt the token store.
-##
-## [b]On web this is obfuscation, not confidentiality.[/b] The key is derived
-## inside the same origin as the ciphertext, so anyone with devtools can recover
-## both. It still prevents casual inspection and detects tampering. On desktop and
-## mobile it is real at-rest encryption against another user on the machine.
+## Encrypt the token store. On web this is obfuscation only (the key shares the ciphertext's origin); elsewhere it is real at-rest encryption against other users.
 @export var encrypt_token_store: bool = true
 
-## Refresh the access token this many seconds before it expires.
-##
-## Wide enough that a slow network does not produce a window where the token is
-## live but every request fails.
+## Refresh the access token this many seconds before it expires, wide enough that a slow network never leaves a live token failing.
 @export_range(10.0, 3600.0, 10.0) var refresh_margin_sec: float = 300.0
 
 @export_group("Server")
@@ -114,20 +59,12 @@ enum Strategy {
 ## How this server authenticates clients. See [enum Strategy].
 @export var strategy: Strategy = Strategy.TICKET
 
-## Identifier this server is known by, and the audience tickets must name.
-##
-## A ticket minted for [code]eu-west-1[/code] must not be accepted by
-## [code]us-east-2[/code] — otherwise a ticket captured on one server is a login
-## on every server, which is the whole thing tickets exist to prevent.
+## Identifier this server is known by, and the audience tickets must name, so a ticket captured on one server is not a login on every server.
 @export var server_id: String = ""
 
-## The backbone audience this server announces for [constant Strategy.INTROSPECT]:
-## its integration credential's target, `server:<id>` or `app:<id>`.
+## The backbone audience this server announces for [constant Strategy.INTROSPECT]: `server:<id>` or `app:<id>`.
 ##
-## Leave empty to have [DotAuthServer] read it from `GET /api/integration/v1/me`
-## once [member DotAuthServer.backbone] is set. Set it to pin the value. A wrong value
-## is not a hole, only a broken join: the backbone refuses a join token minted for
-## another audience (`wrong_audience`).
+## Empty reads it from `GET /api/integration/v1/me` once [member DotAuthServer.backbone] is set. A wrong value only breaks joins (`wrong_audience`).
 @export var join_audience: String = ""
 
 ## PEM public key of the ticket issuer, for [constant Strategy.TICKET]. When set it is
@@ -148,25 +85,16 @@ var ticket_public_keys: Dictionary = {}
 ## for another backbone is ignored. Empty keeps nothing.
 @export var ticket_trust_cache: String = ""
 
-## Where a client asks for connect tickets. Empty means the backbone's own issuer
-## (`POST /api/app/v1/auth/ticket`); a publisher running [DotAuthIssuer] names its base
-## URL. The bearer token goes there, so it is layered like [member backbone_url]:
-## never from a page's query string.
+## Where a client asks for connect tickets; empty means the backbone's own issuer. The bearer token goes there, so it is layered like [member backbone_url], never from a query string.
 @export var ticket_issuer_url: String = ""
 
-## Seconds a ticket stays valid after issue.
-##
-## Short on purpose: a ticket is only in flight between "the client asked for it"
-## and "the client connected". Minutes, not hours.
+## Seconds a ticket stays valid after issue; short on purpose, as it only spans "asked for" to "connected".
 @export_range(30, 3600, 30) var ticket_ttl_sec: int = 300
 
 ## Clock skew tolerated when checking ticket times.
 @export_range(0, 600, 10) var ticket_leeway_sec: int = 60
 
-## Remember spent ticket ids for this long, to refuse replays.
-##
-## Must exceed [member ticket_ttl_sec], otherwise a ticket outlives the memory of
-## having been used and can be replayed in the gap.
+## Remember spent ticket ids this long to refuse replays; must exceed [member ticket_ttl_sec] or a ticket outlives the memory of its use.
 @export_range(60, 7200, 60) var ticket_replay_memory_sec: int = 900
 
 ## Most spent ticket ids remembered; past it new tickets are refused until old ones
@@ -177,88 +105,45 @@ var ticket_public_keys: Dictionary = {}
 ## older clients, which ask for unbound tickets, are still about.
 @export var require_ticket_binding: bool = false
 
-## Accept guests when authentication fails or is unavailable.
-##
-## Sensible for a casual server that would rather have players than identities.
-## Turn off where bans need to mean something — a guest can always come back as a
-## different guest.
+## Accept guests when authentication fails or is unavailable. Turn off where bans must mean something: a guest can return as a different guest.
 @export var allow_guests: bool = false
 
 ## Path to the local accounts file, for [constant Strategy.LOCAL].
 @export var local_accounts_path: String = "user://dot_auth_accounts.json"
 
-## The issuer this server tells who is playing on it. Empty means it does not.
+## The issuer this server tells who is playing on it; empty means it does not.
 ##
-## What makes [member single_session] mean anything. The issuer sees every
-## ticket, but a ticket is a player's [i]intention[/i] to connect and says nothing
-## about whether they arrived or when they left. A server that reports its roster
-## through [DotAuthSessionReporter] is what turns "asked for a ticket" into "is
-## on this server right now" — and what releases its players when they leave, so
-## they are not locked out of every other server until the lease runs out.
-##
-## The issuer's base URL, the same one clients ask for tickets. Needs
-## [member session_report_key], which the publisher hands the operator alongside
-## the public key.
+## It is what makes [member single_session] mean anything: a ticket is only an intention to connect. Same base URL clients ask for tickets; needs [member session_report_key].
 @export var session_report_url: String = ""
 
-## Secret this server presents to the issuer when reporting its roster.
-##
-## Per server, issued by the publisher, and refused from the environment and the
-## command line like every other secret. Without it anyone could report any
-## player as being on any server — which would lock them out of everywhere else
-## for the length of the lease, on the strength of a POST.
+## Secret this server presents to the issuer when reporting its roster; per server, file-only. Without it anyone could report any player onto any server and lock them out for the lease.
 @export var session_report_key: String = ""
 
-## Seconds between roster reports to the issuer.
-##
-## Must fit inside the issuer's [member session_lease_sec] with room to lose a
-## report or two, or players on this server drop out of the issuer's records
-## between reports and the restriction goes quiet for everybody on it. Half the
-## lease is the most this should be; the defaults are 60 against 300.
+## Seconds between roster reports; at most half of the issuer's [member session_lease_sec] (defaults 60 against 300), or a lost report drops everyone from the issuer's records.
 @export_range(5.0, 3600.0, 5.0) var session_report_interval_sec: float = 60.0
 
 @export_group("Local profiles")
 
-## Let visitors make an account that lives on THIS server and nowhere else.
+## Let visitors make an account that lives on THIS server only, via [DotLocalProfiles].
 ##
-## Independent of [member strategy], because it is a [DotAuthProvider] rather than a
-## strategy — so a server can take backbone tickets and local profiles at the same
-## time, and a player without a site account is not turned away from a game whose
-## other players have one.
-##
-## [b]Different from [constant Strategy.LOCAL].[/b] That is an operator-maintained
-## file of usernames and passwords, for a server with a known cast. This is
-## self-service: a visitor names themselves, the server issues them a credential, and
-## they are the same player next week — with a profile and an avatar filed under the
-## same key a backbone-backed player would have. See [DotLocalProfiles].
+## Independent of [member strategy] (it is a [DotAuthProvider]), so backbone tickets and local profiles work together. Not [constant Strategy.LOCAL], an operator-maintained username and password file.
 @export var allow_local_profiles: bool = false
 
 ## Where local profiles are stored. Server side; contains hashed credentials.
 @export var local_profiles_path: String = "user://dot_local_profiles.json"
 
-## Refuse to create more than this many. 0 removes the limit.
-##
-## A server that lets an unauthenticated visitor write a row has handed its disk to
-## whoever can reach the port. [member auth_attempts_per_minute] is the first line;
-## this is the backstop.
+## Refuse to create more than this many; 0 removes the limit. The backstop behind [member auth_attempts_per_minute].
 @export_range(0, 1000000, 100) var max_local_profiles: int = 5000
 
-## Let a visitor mint a profile, rather than only use one they already hold.
-##
-## Off means an operator creates them from the console — a closed server that still
-## wants persistent identities without a backbone.
+## Let a visitor mint a profile, rather than only use one they already hold; off means the operator creates them from the console.
 @export var local_profile_signup: bool = true
 
-## Where a CLIENT keeps the secrets servers issued it, keyed by server.
-##
-## Not a server setting. It is here because a game configures one [DotAuthConfig] for
-## both halves, and a client that stores this in the wrong place silently loses every
-## local profile the player has ever made.
+## Where a CLIENT keeps the secrets servers issued it, keyed by server. Here because a game configures one [DotAuthConfig] for both halves; the wrong place silently loses every profile.
 @export var local_profile_client_path: String = "user://dot_local_profiles.dat"
 
 @export_group("Issuer")
 
-## PEM private key used to mint tickets. Issuer only — never ship this in a game.
+## PEM private key that mints tickets. Issuer only, never ship this in a game.
 @export_multiline var issuer_private_key: String = ""
 
 ## Name written into the ticket's [code]iss[/code] claim.
@@ -268,54 +153,23 @@ var ticket_public_keys: Dictionary = {}
 ## rotation.
 @export var issuer_key_id: String = "default"
 
-## Refuse a ticket for one server while the player is on another.
+## Refuse a ticket for one server while the player is on another: one account, one seat.
 ##
-## One account, one seat. A player on [code]eu-west-1[/code] who asks for a
-## ticket to [code]us-east-2[/code] is told which server they are on and refused
-## until they leave it, their server reports them gone, or the lease runs out. A
-## ticket for the server they are [i]already[/i] on is always granted: a crashed
-## client has to be able to reconnect.
-##
-## This lives on the issuer because the issuer is the only participant that sees
-## every server. A game server knows its own roster and nothing about anybody
-## else's, and asking servers to compare notes would mean operators trusting each
-## other, which the ticket design exists to avoid.
-##
-## [b]Only as good as the reporting.[/b] A ticket begins a session; a roster
-## report from the server confirms it and, later, ends it. A server that reports
-## nothing holds its players for [member session_lease_sec] after their ticket
-## and then lets go, whether or not they are still playing. See
-## [member session_report_url].
+## It lives on the issuer, the only participant that sees every server. Only as good as the reporting: an unreporting server holds its players for [member session_lease_sec]. A ticket for the server they are already on is always granted so a crashed client can reconnect. See [member session_report_url].
 @export var single_session: bool = false
 
-## Seconds a session stays live without word from a server.
-##
-## The clock that runs between roster reports and the length a non-reporting
-## server holds a player. Too short and a lost report frees everybody on a
-## server; too long and a server that died keeps its players locked out of
-## everywhere else. Must be at least [member ticket_ttl_sec] — a lease shorter
-## than the ticket lets a player hold a live ticket for one server after the
-## issuer has forgotten it, and get a second one for another.
+## Seconds a session stays live without word from a server; at least [member ticket_ttl_sec], or a player could hold a live ticket for one server and get a second for another.
 @export_range(30, 86400, 30) var session_lease_sec: int = 300
 
 @export_group("Integration API")
 
-## Server-scoped integration token for the backbone's `/api/integration/v1/*` and
-## `/api/content/server/integration/*` endpoints.
-##
-## Lets a dedicated server report its own player count, map and roster to its site
-## listing. Scoped to one server by the backbone, so a leak cannot be pointed at
-## somebody else's listing.
+## Server-scoped integration token for the backbone's `/api/integration/v1/*` and `/api/content/server/integration/*` endpoints; a leak cannot be pointed at another listing.
 @export var integration_token: String = ""
 
 ## Seconds between stat reports to the backbone. 0 disables reporting.
 @export_range(0.0, 3600.0, 5.0) var report_interval_sec: float = 60.0
 
-## Also report the player roster, not just counts.
-##
-## Requires the `SERVER_USERS` scope, which the backbone keeps separate from
-## `SERVER_STATS` deliberately: a player list is personal data about third
-## parties. Leave off unless players expect to be listed publicly.
+## Also report the player roster, not just counts. Needs the `SERVER_USERS` scope (personal data about third parties); leave off unless players expect to be listed.
 @export var report_roster: bool = false
 
 @export_group("Rate limits")
@@ -323,10 +177,7 @@ var ticket_public_keys: Dictionary = {}
 ## Authentication attempts per client per minute.
 @export_range(1, 100, 1) var auth_attempts_per_minute: int = 10
 
-## Backbone requests per minute from this process.
-##
-## A local ceiling that keeps a bug — a retry loop, a stuck poll — from getting
-## the server's integration credential rate-limited or revoked.
+## Backbone requests per minute from this process, so a retry loop cannot get the integration credential rate-limited or revoked.
 @export_range(1, 6000, 10) var backbone_requests_per_minute: int = 120
 
 

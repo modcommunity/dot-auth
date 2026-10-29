@@ -1,31 +1,12 @@
 extends Node
 
-## Runs a standalone ticket issuer.
+## Runs a standalone ticket issuer, the only component holding the signing key; game servers get the public key.
 ##
-## The publisher hosts one of these. It is the only component that holds the
-## signing key or talks to the backbone with a player's token; game-server
-## operators get the public key and nothing else.
-##
-## [codeblock]
-## godot --headless --path . res://examples/issuer.tscn -- \
-##     --auth-backbone-url https://moddingcommunity.com
-##
-## # Exit on its own after a while, for a smoke test or a sweep:
-## godot --headless --path . res://examples/issuer.tscn -- --seconds 5
-## [/codeblock]
-##
-## Generates a keypair on first run and writes it next to the config, which is fine
-## for a trial and not fine for production — see the warning it prints.
+## Generates a keypair on first run next to the config, fine for a trial and not for production. Usage: docs/rationale.md.
 
 const KEY_DIR := "user://issuer_keys"
 
-## How long to stay up, from `--seconds N`. Zero, the default, means forever.
-##
-## This is a daemon rather than a self-test, so it is the one example in the
-## family that never exits — which means a blanket "run every example" sweep
-## stalls here, as one did. A sweep can now bound it instead of relying on
-## SIGTERM, which a headless Godot does not turn into a close request that a
-## Node can act on.
+## How long to stay up, from `--seconds N`; zero means forever. A daemon never exits, so a sweep of examples needs this bound (a headless Godot ignores SIGTERM).
 var _seconds := 0.0
 
 var _issuer: DotAuthIssuer

@@ -2,41 +2,9 @@
 class_name DotLocalProfileProvider
 extends DotAuthProvider
 
-## Signs players in against [DotLocalProfiles] — accounts that never leave this
-## server.
+## Signs players in against [DotLocalProfiles], accounts that never leave this server.
 ##
-## A [DotAuthProvider], which is the extension point that already exists for exactly
-## this ("a LAN token" is named in its own documentation), so a server gets local
-## accounts by registering one object and nothing about the built-in strategies
-## changes. In particular a server can offer local profiles AND backbone tickets at
-## the same time: the provider claims only the credentials that name it, and
-## everything else falls through to the configured strategy.
-##
-## [codeblock]
-## var local := DotLocalProfileProvider.new()
-## local.profiles = DotLocalProfiles.at("user://local_profiles.json")
-## local.profile_created.connect(_send_secret_to_that_client)
-## auth_server.add_provider(local)
-## [/codeblock]
-##
-## Two credential shapes, and they are separate on purpose:
-##
-## [codeblock]
-## {"local_profile": {"id": "sWrM…", "secret": "…"}}   returning player
-## {"local_profile_new": {"name": "Ashley"}}           first join
-## [/codeblock]
-##
-## Folding them into one — "create it if the id is unknown" — would turn every
-## mistyped or expired credential into a brand new profile, so a player whose secret
-## was lost would silently become a stranger with their own name taken.
-##
-## [b]The secret must reach that one client and nobody else.[/b] It is emitted on
-## [signal profile_created] rather than put on the identity, because an identity is
-## relayed: dot-server sends one to every player in the match so they can draw each
-## other's names. A secret on it would be broadcast to the lobby. The signal fires
-## synchronously inside [method DotAuthServer.authenticate], so the peer being
-## admitted is unambiguous — send it over that peer's own channel and never a
-## broadcast one.
+## Two separate credentials, [code]local_profile[/code] (returning) and [code]local_profile_new[/code] (first join), so a lost secret never silently mints a new profile. The secret goes out on [signal profile_created], never on the identity: identities are relayed to every player. The signal fires synchronously inside [method DotAuthServer.authenticate], so send it over that peer's own channel, never a broadcast. Usage: docs/rationale.md.
 
 const LOCAL_CHANNEL := "auth.local-profile"
 
@@ -56,10 +24,7 @@ signal profile_recognised(id: String, name: String)
 ## The store. Required.
 var profiles: DotLocalProfiles = null
 
-## Whether a visitor may mint a profile, or only use one they already hold.
-##
-## Off is a real deployment: an operator who creates profiles from the console and
-## runs a closed server. On is the one this exists for.
+## Whether a visitor may mint a profile, or only use one they already hold (off is a closed, console-managed server).
 var allow_creation: bool = true
 
 
@@ -161,12 +126,7 @@ func _sign_up(raw: Variant, hint: String) -> DotResult:
 
 ## Builds the identity a local profile presents.
 ##
-## [b]`is_guest` is false.[/b] A guest is somebody the server could not identify;
-## this player has a credential this server issued and will be the same person next
-## week. It also governs whether a client may rename itself mid-join
-## ([method DotAuthServer._apply_requested_name]) — and a local profile's name lives
-## in the store, so letting a connect packet override it would make the name on the
-## scoreboard and the name in the file disagree.
+## [code]is_guest[/code] is false: the player holds a credential this server issued. That also stops a connect packet renaming it, which would make the scoreboard and the store disagree.
 func _identity(id: String, name: String) -> DotAuthIdentity:
 	var identity := DotAuthIdentity.new()
 

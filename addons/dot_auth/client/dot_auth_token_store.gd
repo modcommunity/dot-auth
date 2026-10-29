@@ -3,20 +3,7 @@ extends RefCounted
 
 ## Persists the client's credential pair between runs.
 ##
-## Holds the rotating refresh token, which is the thing that means "stay signed
-## in". Losing it costs a re-login; leaking it is a full account takeover until it
-## is rotated or revoked, so it is encrypted at rest where that means anything.
-##
-## [b]Honest limits of the encryption.[/b] The passphrase is derived from a
-## per-install random salt stored beside the ciphertext plus a device-stable
-## string. Against another user on the same machine reading the file, that works.
-## Against the machine's own owner, or anything running as the same user, it does
-## not — the key is right there. On web it is weaker still: everything lives in
-## the same origin, so devtools recovers both halves.
-##
-## That is not a reason to skip it. It raises the cost of the common cases (a
-## synced backup, a shared PC, a stray file in a support bundle) and makes
-## tampering detectable. It is a reason not to claim more than it does.
+## The rotating refresh token is stored encrypted: leaking it is a full account takeover until rotated. The encryption stops other users and stray backups, not the machine's owner or same-user code, and on web the key shares an origin with the ciphertext. Do not claim more. Details: docs/rationale.md.
 
 const CHANNEL := "auth.store"
 
@@ -38,7 +25,6 @@ func _init(p_path: String, p_encrypt: bool = true) -> void:
 	encrypt = p_encrypt
 
 
-# --- Access ----------------------------------------------------------------
 
 func access_token() -> String:
 	return _access_token
@@ -57,9 +43,6 @@ func has_credentials() -> bool:
 
 
 ## Whether the access token is usable for at least [param margin_sec] longer.
-##
-## Treating a token that expires in two seconds as valid produces a request that
-## fails for a reason the caller has already ruled out.
 func is_access_valid(margin_sec: float = 0.0) -> bool:
 	if _access_token == "":
 		return false
@@ -74,7 +57,6 @@ func expires_in() -> int:
 	return maxi(0, _expires_at - int(Time.get_unix_time_from_system()))
 
 
-# --- Mutation --------------------------------------------------------------
 
 ## Records a credential pair from the backbone's `TokenResponse`.
 func set_tokens(
@@ -92,11 +74,7 @@ func set_tokens(
 	return save()
 
 
-## Forgets everything and deletes the file.
-##
-## Used on sign-out and on `token_reuse`, where the backbone has already
-## invalidated the family and keeping a dead token would only produce confusing
-## failures on the next launch.
+## Forgets everything and deletes the file (sign-out, and `token_reuse` where the backbone already killed the family).
 func clear() -> void:
 	_access_token = ""
 	_refresh_token = ""
@@ -113,7 +91,6 @@ func clear() -> void:
 	DotLog.debug(CHANNEL, "credentials cleared")
 
 
-# --- Persistence -----------------------------------------------------------
 
 func load_tokens() -> DotResult:
 	_loaded = true
@@ -128,10 +105,7 @@ func load_tokens() -> DotResult:
 		read = DotPaths.read_bytes(path)
 
 	if not read.ok:
-		# A store we cannot read is treated as no store: the overwhelmingly
-		# common cause is a device-identity change, not an attack, and a player
-		# who has to sign in again is a far better outcome than a launch that
-		# refuses to proceed.
+		# An unreadable store counts as no store (usually a device-identity change): signing in again beats a launch that refuses.
 		DotLog.info(
 			CHANNEL,
 			"stored credentials could not be read; signing in again",
@@ -195,14 +169,8 @@ func is_loaded() -> bool:
 	return _loaded
 
 
-# --- Key derivation --------------------------------------------------------
 
-## Passphrase for the encrypted store.
-##
-## Two ingredients: a random per-install salt written next to the store, and a
-## device-stable string. The salt means two installs never share a key even with
-## identical device identity; the device string means copying the pair to another
-## machine does not produce a readable store.
+## Passphrase for the encrypted store: a random per-install salt beside it plus a device-stable string, so a copied pair is unreadable elsewhere.
 func _passphrase() -> String:
 	return DotHash.sha256_text("dot-auth/v1|%s|%s" % [_salt(), _device_seed()])
 
@@ -224,12 +192,7 @@ func _salt() -> String:
 	return salt
 
 
-## Something stable about this device.
-##
-## Deliberately coarse. A unique-id API that changes on OS update would lock
-## players out of their own store on a routine upgrade, and the failure mode of
-## being too stable here is only that the file is readable on a machine that can
-## already read the salt sitting next to it.
+## Something stable about this device, deliberately coarse: an id that changes on an OS update would lock players out of their own store.
 func _device_seed() -> String:
 	var parts := PackedStringArray()
 	parts.append(OS.get_name())

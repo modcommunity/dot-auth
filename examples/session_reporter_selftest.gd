@@ -2,28 +2,7 @@ extends Node
 
 ## A dedicated server that stops frees its players' seats on its own report, not the lease.
 ##
-## [codeblock]
-## timeout 120 godot --headless --path . res://examples/session_reporter_selftest.tscn
-## [/codeblock]
-##
-## Real [DotServer]s (linked from dot-server; see .gitignore) with a [DotAuthServer] as a
-## child, the way dot-server-deploy's host places it, and a real [DotAuthIssuer] holding
-## the seats with [member DotAuthConfig.single_session] on and a 300-second lease. Every
-## check that a seat is free is made seconds after it was confirmed, so only a report can
-## have freed it.
-##
-## [b]The issuer's socket is a fake, on a thread.[/b] The goodbye a stopping server sends
-## is synchronous (the tree is being torn down, so nothing asynchronous survives it), and
-## the real issuer's listener is polled from [code]_process[/code] on the same main thread
-## that is blocked waiting for its answer. So a thread accepts the request, answers 200 and
-## records it, and the main thread hands each recorded roster to the real issuer's public
-## [method DotAuthIssuer.authorize_server] and [method DotAuthIssuer.report_sessions], which
-## is what its [code]/session[/code] route does with one. The issuer's own HTTP route is
-## covered by auth_demo.
-##
-## [b]Armed[/b]: with [member DotAuthServer.create_session_reporter] defaulting to false,
-## or [method DotAuthSessionReporter._exit_tree] / [code]follow_server[/code] removed, the
-## checks marked "freed" fail. The last section is that control, kept in the suite.
+## Real [DotServer]s (linked from dot-server) with a [DotAuthServer] child and a real [DotAuthIssuer] on a 300-second lease, so a seat freed seconds after confirming can only have been freed by a report. The issuer's socket is a fake on a thread: the goodbye is synchronous and would block the main thread the real listener polls on. Armed by: [member DotAuthServer.create_session_reporter] defaulting false, or removing [code]follow_server[/code]. Run: timeout 120 examples/session_reporter_selftest.tscn.
 
 const SERVER_A := "eu-west-1"
 const SERVER_B := "us-east-2"
@@ -110,7 +89,6 @@ func _run() -> void:
 	_finish()
 
 
-# --- 1 ---------------------------------------------------------------------
 
 func _test_off_without_a_url() -> void:
 	_section("no session_report_url: nothing is built, nothing is sent")
@@ -132,7 +110,6 @@ func _test_off_without_a_url() -> void:
 	_done()
 
 
-# --- 2 ---------------------------------------------------------------------
 
 func _test_shutdown_reports() -> void:
 	_section("shutdown(): the seat frees on the report")
@@ -189,7 +166,6 @@ func _test_shutdown_reports() -> void:
 	_done()
 
 
-# --- 3 ---------------------------------------------------------------------
 
 ## What `quit` (the console's, a scheduled restart's, the host's) does: every node leaves
 ## the tree, children first, so the reporter goes before DotServer's own `_exit_tree`
@@ -239,7 +215,6 @@ func _test_leaving_the_tree_reports() -> void:
 	_done()
 
 
-# --- 4 ---------------------------------------------------------------------
 
 func _test_unreachable_issuer() -> void:
 	_section("an issuer that is not there costs a stop at most the timeout")
@@ -287,7 +262,6 @@ func _test_unreachable_issuer() -> void:
 	_done()
 
 
-# --- 5 ---------------------------------------------------------------------
 
 ## The control: the same stop with the reporter switched off leaves the seat to the
 ## lease. This is what every server did before the auth server built one.
@@ -316,7 +290,6 @@ func _test_control_without_the_reporter() -> void:
 	_done()
 
 
-# --- Helpers ---------------------------------------------------------------
 
 func _server_config(port: int) -> DotServerConfig:
 	var config := DotServerConfig.new()

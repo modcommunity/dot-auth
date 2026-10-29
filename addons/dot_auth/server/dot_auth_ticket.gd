@@ -1,34 +1,9 @@
 class_name DotAuthTicket
 extends RefCounted
 
-## A short-lived, single-server credential proving who a connecting player is.
+## A short-lived, audience-scoped, single-use, RS256-signed credential proving who a connecting player is.
 ##
-## [b]The problem it solves.[/b] A player has an account on the backbone. A
-## community-run game server needs to know who they are. The obvious answer —
-## send the server your account token and let it ask the backbone — hands every
-## server operator a live credential for your whole site account. That is
-## unacceptable for a game with third-party servers, and it is why platforms have auth
-## session tickets rather than sharing session cookies.
-##
-## So: the client asks a [DotAuthIssuer] the publisher runs (first-party, already
-## trusted with the token) for a ticket naming one server. The server verifies it
-## offline against the issuer's public key. The server learns an identity and
-## nothing it can reuse.
-##
-## Four properties make it work, and dropping any one of them breaks it:
-##
-## - [b]Audience-scoped.[/b] [code]aud[/code] is the server id. A ticket captured
-##   on server A is refused by server B, so a malicious operator cannot replay
-##   their players' tickets elsewhere.
-## - [b]Short-lived.[/b] Minutes. It only has to survive "asked for it" to
-##   "connected".
-## - [b]Single-use.[/b] [code]jti[/code] is remembered until expiry, so capturing
-##   one in flight does not let it be used twice.
-## - [b]Asymmetrically signed.[/b] RS256, so a verifying server cannot mint. With
-##   HS256 every server holding the verification key could forge a ticket for any
-##   player.
-##
-## Encoded as a compact JWS — see [DotJwt].
+## Encoded as a compact JWS, see [DotJwt]. Why a ticket and not the account token: docs/tickets.md.
 
 const CHANNEL := "auth.ticket"
 
@@ -78,11 +53,9 @@ static func issue(
 	return DotJwt.encode_rs256(claims, private_key_pem, key_id)
 
 
-## Verifies a ticket and returns the [DotAuthIdentity] inside it.
+## Verifies a ticket and returns its [DotAuthIdentity].
 ##
-## [param expected_server_id] must match the ticket's audience. Passing
-## [code]""[/code] disables the check and is [b]never[/b] correct in production —
-## it turns every ticket into a universal one.
+## [param expected_server_id] must match the audience; [code]""[/code] disables the check and makes every ticket universal.
 static func verify(
 	ticket: String,
 	public_key_pem: String,
@@ -144,10 +117,7 @@ static func verify(
 	})
 
 
-## Reads a ticket's audience without verifying it.
-##
-## For routing a ticket to the right server in a multi-instance process. Never for
-## an authorisation decision.
+## Reads a ticket's audience without verifying it; for routing only, never for authorisation.
 static func peek_audience(ticket: String) -> String:
 	var peeked := DotJwt.peek(ticket)
 	if not peeked.ok:

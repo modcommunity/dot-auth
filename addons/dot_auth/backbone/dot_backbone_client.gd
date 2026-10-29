@@ -2,38 +2,13 @@
 class_name DotBackboneClient
 extends Node
 
-## Reports a dedicated server's own state to its listing on the backbone.
+## Reports a dedicated server's own state to its listing on the backbone, with a server-scoped credential.
 ##
-## Speaks the backbone's integration API (`/api/integration/v1/*` and
-## `/api/content/server/integration/*`) with a server-scoped credential. That
-## credential is bound to one server row, so nothing sent here names a server —
-## the token decides which listing this is about, which is what stops a leaked
-## token being pointed at somebody else's.
-##
-## What it is for: a server that reports its own player count, map and roster is
-## strictly better data than a listing scraped by a query packet — no packet loss,
-## no rate-limited A2S, no player list truncated at 255.
-##
-## [b]Replay protection is mandatory and this class handles it.[/b] Every request
-## carries a Unix-seconds `ts` and a random `nonce`; the backbone refuses anything
-## outside its skew window and remembers nonces inside it. A reporter that omits
-## them still gets the timestamp window, but sending both is free and closes the
-## gap.
+## The credential is bound to one server row, so nothing sent names a server and a leaked token cannot be pointed at another listing. Every request carries a Unix-seconds `ts` and a random `nonce` for replay protection.
 
 const CHANNEL := "backbone"
 
-## Registry name, so anything needing a backbone can find one without being handed it.
-##
-## [b]This was missing, and it is a shape this family has paid for before.[/b]
-## `DotCloudClient` went unregistered the same way and four call sites across dot-server
-## and dot-user-avatar all found null — none of them errored, because "no cloud client"
-## is a legitimate configuration and therefore indistinguishable from the bug.
-##
-## A backbone client is built by whatever owns the server's credential — dot-server-setup-
-## test's `TmcReport`, a game's own identity layer — and consumed by things that cannot
-## reach that: a chat relay, a stats reporter, a leaderboard. Handing it over means every
-## host growing per-consumer plumbing AND getting the ordering right, since a consumer
-## built during module load is built before a host could assign anything.
+## Registry name, so consumers (chat relay, stats reporter, leaderboard) find the client without the host wiring each one.
 const SERVICE := &"dot_backbone_client"
 
 ## Scopes the backbone requires. Documented here so a misconfigured integration
@@ -57,11 +32,7 @@ var _timer: Timer = null
 var _limiter: DotRateLimiter = null
 var _started: bool = false
 
-## Supplies the current server state at report time.
-##
-## Set by dot-server. Must return a dictionary shaped like
-## [method report_stats]'s argument. A callable rather than pushed state so the
-## numbers are sampled when they are sent, not when they last changed.
+## Supplies the current server state at report time (set by dot-server), sampled when sent, not when it last changed.
 var stats_provider: Callable = Callable()
 
 ## Supplies the current roster. Same contract as [member stats_provider].
@@ -146,17 +117,8 @@ func report_offline() -> DotResult:
 	return await report_stats({"online": false, "curUsers": 0})
 
 
-# --- Reporting -------------------------------------------------------------
 
-## Sends live server state.
-##
-## A PATCH in behaviour: absent fields are left alone, so a tick that only changes
-## the player count sends two numbers rather than the whole record. Recognised
-## keys mirror the backbone's `IngestServerStatsInput` — [code]online[/code],
-## [code]curUsers[/code], [code]maxUsers[/code], [code]bots[/code],
-## [code]map[/code], [code]gameMode[/code], [code]version[/code],
-## [code]password[/code], [code]secure[/code], [code]dedicated[/code],
-## [code]os[/code], [code]vars[/code].
+## Sends live server state as a PATCH: absent fields are left alone. Keys mirror the backbone's `IngestServerStatsInput`.
 func report_stats(stats: Dictionary) -> DotResult:
 	if not _started:
 		return DotResult.fail(DotError.CODE_STATE, "Not started.")
@@ -198,15 +160,7 @@ func report_stats(stats: Dictionary) -> DotResult:
 
 ## Sends the whole current roster.
 ##
-## [b]Absolute, not incremental.[/b] The backbone reconciles from the full list
-## every time, because an incremental protocol needs guaranteed delivery of every
-## join and leave, and one dropped report leaves somebody "online" forever.
-##
-## An empty list therefore means "nobody is connected" and closes every open
-## session. A server that does not know its roster must not call this at all.
-##
-## Needs the `SERVER_USERS` scope, which the backbone keeps separate from
-## `SERVER_STATS` on purpose: a player list is personal data about third parties.
+## Absolute, not incremental: one dropped incremental report would leave somebody "online" forever. An empty list closes every open session, so a server that does not know its roster must not call this. Needs `SERVER_USERS`, kept apart from `SERVER_STATS` because a player list is personal data.
 func report_users(
 	users: Array,
 	set_count: bool = true
@@ -271,12 +225,7 @@ func report_users(
 	return res
 
 
-## Resolves an in-game name to a site member, within a party.
-##
-## Deliberately narrow on the backbone's side: it answers only within a party the
-## integration is entitled to, only for members who joined that party themselves,
-## and returns an id and a display name. It is not a general name lookup and must
-## not be treated as one.
+## Resolves an in-game name to a site member, within a party only; it is not a general name lookup.
 func lookup_user(
 	party_id: String,
 	name: String,
@@ -297,10 +246,7 @@ func lookup_user(
 	)
 
 
-## POSTs to an arbitrary integration endpoint, with stamping and headers applied.
-##
-## For the party endpoints a game mode might use (`party/create`, `party/state`,
-## `party/session`, `party/end`) without this class having to model each one.
+## POSTs to an arbitrary integration endpoint, with stamping and headers applied (the party endpoints, say).
 func post_integration(path: String, body: Dictionary) -> DotResult:
 	if not _started:
 		return DotResult.fail(DotError.CODE_STATE, "Not started.")
@@ -318,12 +264,7 @@ func post_integration(path: String, body: Dictionary) -> DotResult:
 	)
 
 
-## GETs an arbitrary integration endpoint, with the same headers and limits.
-##
-## The read half of [method post_integration]: a leaderboard page, a player's
-## statistics. [param query] is encoded and appended; [code]ts[/code] is added
-## to it and the nonce rides in the header, because a GET has no body to carry
-## either and the backbone reads both from where a GET can put them.
+## GETs an arbitrary integration endpoint; [code]ts[/code] goes in [param query] and the nonce in the header, as a GET has no body.
 func get_integration(path: String, query: Dictionary = {}) -> DotResult:
 	if not _started:
 		return DotResult.fail(DotError.CODE_STATE, "Not started.")
@@ -350,13 +291,8 @@ static func encode_query(params: Dictionary) -> String:
 	return "&".join(parts)
 
 
-# --- Plumbing --------------------------------------------------------------
 
-## Adds the replay-protection fields the backbone checks.
-##
-## [code]ts[/code] is Unix [b]seconds[/b]. Milliseconds are refused loudly by the
-## backbone's window check, which is a mistake worth making impossible here rather
-## than at four call sites.
+## Adds the replay-protection fields; [code]ts[/code] is Unix [b]seconds[/b], and the backbone refuses milliseconds loudly.
 func _stamp(body: Dictionary) -> void:
 	body["ts"] = int(Time.get_unix_time_from_system())
 	body["nonce"] = DotHash.random_hex(16)

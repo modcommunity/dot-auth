@@ -2,33 +2,9 @@
 class_name DotAuthServer
 extends "res://addons/dot_auth/server/dot_auth_server_local.gd"
 
-## Decides who a connecting client is. The game server's side of dot-auth.
+## Decides who a connecting client is: the game server's side of dot-auth.
 ##
-## dot-server calls [method authenticate] with whatever credential a client
-## presented and gets back a [DotAuthIdentity] or a refusal. Which strategy runs
-## is [member DotAuthConfig.strategy], so the same server binary works as a
-## public ticket-verifying server, a first-party introspecting one, a LAN server
-## with a local account file, or an open anonymous one.
-##
-## [codeblock]
-## var res := await auth.authenticate({
-##     "ticket": ticket_from_client,
-##     "name": requested_name,
-##     "device_id": client_device_id,
-## })
-## if not res.ok:
-##     session.reject(res.error.message)
-##     return
-## session.identity = res.value
-## [/codeblock]
-##
-## Registers itself in [DotRegistry] as [code]dot_auth_server[/code] so
-## dot-server can find it without a hard dependency in either direction.
-##
-## [b]It also builds the [DotAuthSessionReporter][/b] when the config names an issuer
-## to report to ([member DotAuthConfig.session_report_url]), and points it at the
-## [code]dot_server[/code] it finds in [DotRegistry]. See [member session_reporter] for
-## why here and not in dot-game or dot-server.
+## dot-server calls [method authenticate] with the client's credential and gets a [DotAuthIdentity] or a refusal; [member DotAuthConfig.strategy] picks the method. Registers as [code]dot_auth_server[/code] in [DotRegistry], and builds the [DotAuthSessionReporter] when [member DotAuthConfig.session_report_url] is set. Usage: docs/rationale.md.
 
 ## Registry name dot-server looks for.
 const SERVICE := &"dot_auth_server"
@@ -50,33 +26,14 @@ signal rejected(reason: String, detail: String)
 ## set. Off for a host that builds and feeds its own.
 @export var create_session_reporter: bool = true
 
-## The reporter this server built, or null (no [code]session_report_url[/code], or
-## [member create_session_reporter] off).
+## The reporter this server built, or null (no [code]session_report_url[/code], or [member create_session_reporter] off).
 ##
-## [b]Why the auth server builds it.[/b] The reporter's lifetime is the server
-## process's and its config is this node's: the issuer key, URL and server id are
-## [DotAuthConfig] fields the host already hands here. The alternatives each get one of
-## those wrong. dot-game's [code]DotGameModule[/code] is per GAME: a game change would
-## unload it with every player still connected (so it could neither say goodbye nor
-## stay silent honestly), and arena, g2gfast, hungario and playground are not on it.
-## Games never own authentication; the host's [code]dot_auth_server[/code] is the same
-## for every game it runs. dot-server never names dot-auth. So it lives beside the
-## config it reads, and reaches dot-server by duck type through [DotRegistry], the way
-## dot-server reaches this node.
+## Built here because its lifetime and config are this node's; dot-game's per-GAME module would unload it mid-game, and dot-server never names dot-auth. It reaches dot-server by duck type through [DotRegistry].
 var session_reporter: DotAuthSessionReporter = null
 
 ## The server's own backbone client, holding its integration credential.
 ##
-## [b]Set it and INTROSPECT asks the backbone as THIS SERVER[/b] —
-## `POST integration/v1/player/introspect` — and gets back the player's key in this
-## server's scope rather than their account id. That key is the only identifier the
-## backbone's avatar, profile and stats routes resolve for this server, and it is one
-## other operators cannot correlate. Unset, INTROSPECT reads `/api/app/v1/me` as it
-## always has, which answers with the account id and is for first-party servers only
-## (and fails for a current client, whose join token `/me` refuses).
-##
-## Setting it also learns [method join_audience] from `integration/v1/me` when
-## [member DotAuthConfig.join_audience] is not pinned.
+## Set, INTROSPECT asks the backbone as THIS SERVER and gets the player's key in this server's scope, which other operators cannot correlate. Unset, it reads `/api/app/v1/me` (first-party servers only). Also learns [method join_audience] when not pinned.
 var backbone: DotBackboneClient = null:
 	set(value):
 		backbone = value
@@ -91,13 +48,9 @@ var _discovered_audience: String = ""
 ## with backoff capped at 30 s (the default is about an hour).
 var discover_audience_tries: int = 130
 
-## Refuse an INTROSPECT join while [member backbone] is unset, rather than falling back
-## to `/me`.
+## Refuse an INTROSPECT join while [member backbone] is unset, rather than falling back to `/me`.
 ##
-## For a host that hands the client over after boot: the listener opens before the
-## server's integration credential is loaded, and a player let in through `/me` in that
-## window is keyed by their account id — a different identity from the one the same
-## player gets a minute later, so their profile, avatar and bans would split in two.
+## A player let in through `/me` before the credential loads is keyed by account id, splitting profile, avatar and bans from the identity they get a minute later.
 var scoped_only: bool = false
 
 var _limiter: DotRateLimiter = null
@@ -113,12 +66,7 @@ var _stats := {"ok": 0, "rejected": 0, "guests": 0}
 
 ## Refusals in a row, with no real sign-in between, before the pattern is logged at WARN.
 ##
-## One refused ticket is a player's problem -- an expired one, a copy from the wrong
-## server -- and is INFO. Ten in a row with nobody getting in is almost always this
-## server's: a `ticket_public_key` from another deployment, a `server_id` that does not
-## match what the backbone issues for, a clock that has drifted. Nothing else in the
-## process can tell those apart, and every one of them reads, from the player's side, as
-## "the server will not let me in".
+## One refused ticket is the player's problem (INFO); ten in a row is almost always this server's (a foreign key, a wrong `server_id`, clock drift).
 const REFUSAL_RUN_WARN := 10
 
 var _refused_run: int = 0
@@ -133,18 +81,11 @@ var _verifier_down: bool = false
 ## See [DotAuthProvider]. Kept sorted by priority.
 var _providers: Array[DotAuthProvider] = []
 
-## The provider built from [member DotAuthConfig.allow_local_profiles], if any.
-##
-## Held so [method describe] can report it and a game can reach the store — an
-## operator's "remove that player's profile" console command needs it, and going
-## back through [member _providers] to find it by name would be worse.
+## The provider built from [member DotAuthConfig.allow_local_profiles], if any; held so a console command can reach the store.
 var _local_profiles: DotLocalProfileProvider = null
 
 
-## Registers a custom authentication provider.
-##
-## Validated at registration so a provider missing an API key fails at boot rather
-## than on the first player's login.
+## Registers a custom authentication provider, validated now so a missing API key fails at boot, not on the first login.
 func add_provider(provider: DotAuthProvider) -> DotResult:
 	if provider == null:
 		return DotResult.fail(DotError.CODE_INVALID, "Null provider.")
@@ -283,11 +224,7 @@ func _begin_ticket_trust() -> void:
 	add_child(t)
 
 
-## The local-profile provider this server built, or null.
-##
-## The way a game reaches the store — an operator console command that removes an
-## abusive player's profile needs it, and hunting through the provider list by name
-## is the kind of thing every caller would do slightly differently.
+## The local-profile provider this server built, or null; the way a game reaches the store.
 func local_profiles() -> DotLocalProfileProvider:
 	return _local_profiles
 
@@ -329,16 +266,10 @@ func _on_service_registered(service: StringName, instance: Object) -> void:
 	session_reporter.follow_server(instance)
 
 
-# --- Authentication --------------------------------------------------------
 
 ## Resolves a client's credential to an identity.
 ##
-## [param credential] carries whatever the client sent. Recognised keys:
-## [code]ticket[/code], [code]access_token[/code], [code]username[/code] /
-## [code]password[/code], [code]device_id[/code], [code]name[/code].
-## [param rate_key] scopes the attempt limit — pass the peer's address so one
-## client cannot exhaust another's budget. [param connection_nonce] is the nonce the
-## host put in THIS connection's challenge; a ticket bound to another is refused.
+## [param credential] keys: [code]ticket[/code], [code]access_token[/code], [code]username[/code], [code]password[/code], [code]device_id[/code], [code]name[/code]. [param rate_key] scopes the attempt limit (the peer's address); [param connection_nonce] is the host's nonce for THIS connection, and a ticket bound to another is refused.
 func authenticate(
 	credential: Dictionary,
 	rate_key: Variant = null,
@@ -360,8 +291,7 @@ func authenticate(
 	)
 
 	if not _limiter.allow(key):
-		# Rate limiting runs before providers, so a custom provider that talks to an
-		# external service cannot be used to make this server hammer it.
+		# Rate limiting runs before providers, so a custom provider cannot turn this server into a hammer on an external service.
 		var err := DotError.make(
 			DotError.CODE_RATE_LIMITED,
 			"Too many sign-in attempts. Please wait a moment."
@@ -374,10 +304,7 @@ func authenticate(
 
 	var res: DotResult = null
 
-	# Custom providers first. One that claims a credential owns the outcome — a
-	# provider that recognised a platform ticket and then rejected it has decided, and
-	# falling through to the built-in strategy would let a refused login in by
-	# another door.
+	# Custom providers first. One that claims a credential owns the outcome: falling through after a rejection would let a refused login in by another door.
 	for provider in _providers:
 		if not provider.handles(credential):
 			continue
@@ -414,11 +341,7 @@ func authenticate(
 	return _finish(res, key, credential)
 
 
-## Applies the guest fallback and records the outcome.
-##
-## Shared by the provider path and the built-in strategies, so both get the same
-## fallback rules, the same counters and the same signals — a provider whose result
-## skipped this would be authenticated differently from everyone else.
+## Applies the guest fallback and records the outcome, shared by the provider path and the built-in strategies so both get the same rules, counters and signals.
 func _finish(
 	res: DotResult,
 	key: Variant,
@@ -473,22 +396,7 @@ func _finish(
 
 ## Says why a sign-in was refused, at the level of whoever has to act on it.
 ##
-## [b]The level is chosen by who is expected to act[/b], which is the family's rule and the
-## reason this is not one line at one level:
-##
-## - A refused credential -- wrong password, expired or forged ticket, a ticket for another
-##   server -- is the player's, and INFO: an admin wants failed sign-ins kept (they are what
-##   a guessing attack looks like) but nobody has to do anything about one. A long run of
-##   them with no success between is escalated once to WARN; see [constant REFUSAL_RUN_WARN].
-## - Rate limiting is the limiter doing its job, at DEBUG. The attempts that tripped it were
-##   each logged at INFO already.
-## - A verifier that cannot be reached is WARN, once per outage, in [method _finish]; each
-##   refusal it causes is DEBUG here.
-## - Anything that is this server's own fault -- an unknown strategy, a provider that failed
-##   internally, a file it could not read -- is ERROR.
-##
-## Never the credential itself: no password, no token, no ticket. The username is logged
-## because it is what a guessing attack is aimed at, and an operator needs it to see one.
+## A refused credential is the player's (INFO, kept as it is what a guessing attack looks like; a long run escalates once, see [constant REFUSAL_RUN_WARN]); rate limiting is DEBUG; an unreachable verifier is WARN in [method _finish]; this server's own fault is ERROR. Never the credential itself (no password, token or ticket); the username is logged because guessing aims at it.
 func _log_refusal(err: DotError, key: Variant, credential: Dictionary) -> void:
 	var code := err.code if err != null else DotError.CODE_INTERNAL
 	var fields := {
@@ -636,12 +544,7 @@ func _check_ticket_binding(ticket_nonce: String, credential: Dictionary) -> DotR
 
 ## Resolves what an INTROSPECT client sent.
 ##
-## With a [member backbone]: a single-use join token (or a legacy web build's GAME
-## token) through `player/introspect`, which yields a scoped key and leaves the
-## operator nothing to replay. Without one: `/api/app/v1/me`, first-party servers
-## only. A client that will not send a token here (this server is not on its
-## first-party list) sends a connect ticket instead, which is verified offline when
-## an issuer key is set or adopted.
+## With a [member backbone]: a join token through `player/introspect`, yielding a scoped key. Without: `/api/app/v1/me`, first-party servers only. A client that will not send a token sends a connect ticket instead, verified offline.
 func _authenticate_introspect(credential: Dictionary) -> DotResult:
 	var token := str(credential.get("access_token", ""))
 	if token == "" and str(credential.get("ticket", "")) != "" \
@@ -710,11 +613,9 @@ func _authenticate_introspect(credential: Dictionary) -> DotResult:
 	return DotResult.success(identity)
 
 
-## INTROSPECT through the server's integration credential. See [member backbone].
+## INTROSPECT through the server's integration credential, see [member backbone].
 ##
-## The identity it builds carries no account id at all: [member DotAuthIdentity.uid]
-## is `tmc:<key>` and the key is in the `scoped_key` claim, which is what dot-user
-## files the profile under and what the backbone's avatar route resolves.
+## The identity has no account id: [member DotAuthIdentity.uid] is `tmc:<key>` and the key is the `scoped_key` claim dot-user files the profile under.
 func _authenticate_introspect_scoped(token: String, credential: Dictionary) -> DotResult:
 	var res := await backbone.post_integration(
 		"player/introspect", {"access_token": token}
@@ -766,11 +667,7 @@ func _authenticate_introspect_scoped(token: String, credential: Dictionary) -> D
 	return DotResult.success(identity)
 
 
-## Forgets ticket ids that have expired anyway.
-##
-## Bounded by [member DotAuthConfig.ticket_replay_memory_sec], which config
-## validation requires to exceed the ticket TTL — otherwise a ticket could
-## outlive the record of having been spent.
+## Forgets ticket ids that have expired anyway, bounded by [member DotAuthConfig.ticket_replay_memory_sec] (validated to exceed the ticket TTL).
 func _sweep_spent() -> void:
 	var now := int(Time.get_unix_time_from_system())
 	if now - _last_sweep < 60:
@@ -788,15 +685,10 @@ func _sweep_spent() -> void:
 		_spent_tickets.erase(jti)
 
 
-# --- Reporting -------------------------------------------------------------
 
-## The backbone audience this server announces in its handshake, `server:<id>` or
-## `app:<id>`, or [code]""[/code] when it is not known yet.
+## The backbone audience this server announces in its handshake, or [code]""[/code] when not known yet.
 ##
-## [member DotAuthConfig.join_audience] when pinned, else what `integration/v1/me`
-## said about [member backbone]'s credential. A client mints its join token for this
-## value and only for a server it lists as first-party; see
-## [member DotAuthConfig.first_party_audiences].
+## [member DotAuthConfig.join_audience] when pinned, else what `integration/v1/me` said; clients mint join tokens for it only if it is in their [member DotAuthConfig.first_party_audiences].
 func join_audience() -> String:
 	if config != null and config.join_audience != "":
 		return config.join_audience

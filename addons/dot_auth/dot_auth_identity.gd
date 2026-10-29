@@ -2,22 +2,11 @@
 class_name DotAuthIdentity
 extends Resource
 
-## Who a player is, as far as this game is concerned.
-##
-## Produced by whichever backend authenticated them and consumed by dot-server for
-## permissions, moderation and display. Deliberately small: a game server needs an
-## identifier it can ban, a name it can show, and a set of claims it can check.
-## Everything else belongs on the backbone.
+## Who a player is: an identifier a server can ban, a name it can show, and claims it can check.
 
-## Stable, globally unique identifier.
+## Stable, globally unique identifier, namespaced by provider ([code]backbone:clx8f[/code], [code]local:admin[/code]).
 ##
-## [b]The thing bans and admin entries key on[/b], so it must never be reassigned
-## and must never be something a player can change. The backbone's user id
-## qualifies; a display name emphatically does not.
-##
-## Namespaced by provider — [code]backbone:clx8f…[/code], [code]local:admin[/code],
-## [code]guest:a3f9…[/code] — so two backends can never collide and a ban list
-## makes sense when a server switches backends.
+## Bans and admin entries key on it, so it must never be reassigned or player-changeable; a display name emphatically is not one.
 @export var uid: String = ""
 
 ## Which backend vouched for this identity: [code]backbone[/code],
@@ -37,18 +26,10 @@ extends Resource
 
 @export var avatar_url: String = ""
 
-## Site-wide role, e.g. [code]USER[/code], [code]MODERATOR[/code], [code]ADMIN[/code].
-##
-## Advisory. A server decides its own permissions; site staff are not
-## automatically server admins, and treating them as such would let anyone with a
-## site role walk into every server running this addon.
+## Site-wide role, e.g. [code]USER[/code], [code]MODERATOR[/code]. Advisory: site staff are not automatically server admins.
 @export var role: String = ""
 
-## Arbitrary claims from the backend — entitlements, group memberships, flags.
-##
-## dot-server's admin source can map these to permissions, which is how "everyone
-## in the site group 'moderators' gets kick rights here" is expressed without a
-## per-server admin list.
+## Arbitrary claims from the backend (entitlements, groups, flags), which dot-server's admin source can map to permissions.
 @export var claims: Dictionary = {}
 
 ## Unix seconds when this identity was established.
@@ -57,10 +38,7 @@ extends Resource
 ## Unix seconds when it should be re-checked. 0 means no expiry.
 @export var expires_at: int = 0
 
-## True when the player was not authenticated at all.
-##
-## Guests get a stable-per-device id so they can be muted or kicked within a
-## session, but nothing that survives a reinstall.
+## True when the player was not authenticated at all; guests get a per-device id good within a session only.
 @export var is_guest: bool = false
 
 
@@ -75,11 +53,7 @@ static func guest(device_id: String, name: String = "") -> DotAuthIdentity:
 	return id
 
 
-## Builds an identity from the backbone's `SessionUserSchema`.
-##
-## Field names mirror `~/types/app-api/contract.ts` exactly. A drift there shows
-## up here as an empty display name rather than a crash, which is why [member uid]
-## is validated and the rest is not.
+## Builds an identity from the backbone's `SessionUserSchema` (field names mirror `~/types/app-api/contract.ts`); only [member uid] is validated.
 static func from_backbone_user(d: Dictionary) -> DotResult:
 	var provider_id := str(d.get("id", ""))
 	if provider_id == "":
@@ -104,15 +78,9 @@ static func from_backbone_user(d: Dictionary) -> DotResult:
 	return DotResult.success(id)
 
 
-## Builds an identity from the backbone's scoped introspection answer:
-## `{key, name, username}`, where [code]key[/code] is the player's key in the asking
-## server's scope.
+## Builds an identity from the backbone's scoped introspection answer `{key, name, username}`.
 ##
-## [b]No account id, on purpose.[/b] The uid is `tmc:<key>` (TMC, the site that minted it): stable for this player on
-## this server, and meaningless on any other — so bans and admin entries hold, and two
-## operators comparing their logs learn nothing. The key goes in the `scoped_key` claim
-## as well, which dot-user reads instead of deriving a key of its own; a key derived
-## here could never be resolved by the backbone, which only knows the keys it minted.
+## No account id on purpose: the uid is `tmc:<key>`, stable for this player on this server and meaningless elsewhere. The key also goes in the `scoped_key` claim, which dot-user reads; a key derived here could never be resolved by the backbone.
 static func from_scoped_user(d: Dictionary) -> DotResult:
 	var key := str(d.get("key", ""))
 
@@ -184,11 +152,7 @@ func is_expired() -> bool:
 	return int(Time.get_unix_time_from_system()) >= expires_at
 
 
-## Whether a claim is present and truthy.
-##
-## Claims arrive as JSON, so a flag can be [code]true[/code], [code]1[/code] or
-## [code]"true"[/code] depending on the backend. Normalising here keeps every call
-## site from having to know which.
+## Whether a claim is present and truthy; normalises [code]true[/code], [code]1[/code] and [code]"true"[/code] across backends.
 func has_claim(key: String) -> bool:
 	if not claims.has(key):
 		return false
@@ -220,10 +184,7 @@ func groups() -> PackedStringArray:
 	return out
 
 
-## A short label for logs and the `status` command.
-##
-## Includes the uid because a display name is not unique and moderation notes that
-## only record a name are useless the moment somebody changes theirs.
+## A short label for logs and `status`; includes the uid because a display name is not unique and can change.
 func label() -> String:
 	return "%s <%s>" % [display_name, uid]
 

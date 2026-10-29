@@ -9,3 +9,5 @@ The reasoning behind authentication, one subject per file. [CLAUDE.md](../CLAUDE
 | [backbone.md](backbone.md) | The website-city endpoints this depends on, the details already handled, the backbone URL and overriding it |
 | [security.md](security.md) | Decisions worth not undoing, and the two things weaker than they look |
 | [history.md](history.md) | The bugs, and how each looked |
+| [rationale.md](rationale.md) | Reasoning moved out of source comments, one section per file |
+| [api-levels.md](api-levels.md) | What each API level added |

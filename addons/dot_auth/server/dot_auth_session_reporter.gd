@@ -2,56 +2,13 @@
 class_name DotAuthSessionReporter
 extends Node
 
-## Tells the issuer who is playing on this server.
+## Tells the issuer who is playing on this server: the server half of [member DotAuthConfig.single_session].
 ##
-## The server half of [member DotAuthConfig.single_session]. The issuer learns
-## that a player is [i]going[/i] somewhere when it mints their ticket; it learns
-## they [i]arrived[/i], and later that they [i]left[/i], from this. A server
-## that does not run one still works with the rule on — its players are held
-## for the lease after their ticket and then let go — but it cannot free a
-## player the moment they leave, and it cannot hold one for a whole match.
-##
-## Every report is the whole roster, exactly as [DotBackboneClient] reports to
-## the site: absent means gone. So the host supplies a callable returning the
-## current uids rather than pushing joins and leaves, and a report lost in
-## transit costs one interval, not a stuck record.
-##
-## [b]A host does not usually build one.[/b] [DotAuthServer] creates it as its own
-## child when [member DotAuthConfig.session_report_url] is set, and points it at the
-## [code]dot_server[/code] in [DotRegistry] with [method follow_server]. Built by hand
-## (a host with its own roster, or no dot-server):
-##
-## [codeblock]
-## var reporter := DotAuthSessionReporter.new()
-## reporter.config = auth_config           # session_report_url, _key, server_id
-## reporter.roster_provider = func() -> Array:
-##     return my_players.map(func(p): return p.uid)
-## add_child(reporter)
-## # and before the process stops:
-## reporter.report_offline_now()
-## [/codeblock]
-##
-## [b]Which shutdowns say goodbye.[/b] The empty roster goes out, blocking for at most
-## [member offline_timeout_sec], when a followed server enters SHUTTING_DOWN and when
-## this node leaves the tree, which [code]SceneTree.quit()[/code] (the console's
-## [code]quit[/code], a scheduled restart) does to every node. Blocking, because both
-## happen with the process about to end, and an asynchronous request is freed with the
-## tree before it is answered. SIGINT and SIGTERM do NOT reach here: headless Godot
-## runs no notification at all for them, so a server stopped with Ctrl+C, [code]kill[/code],
-## a container stop or a crash leaves its players to the issuer's lease.
-##
-## Authenticated to the issuer with [member DotAuthConfig.session_report_key],
-## which the publisher issues per server. It travels as a bearer token over the
-## reverse proxy's TLS, the same way a player's access token reaches
-## [code]/ticket[/code].
+## Every report is the whole roster (absent means gone), from a callable the host supplies, so a lost report costs one interval. [DotAuthServer] builds it when [member DotAuthConfig.session_report_url] is set, authenticated with [member DotAuthConfig.session_report_key] as a bearer token over the proxy's TLS. Goodbye on shutdown and SIGINT limits: docs/rationale.md.
 
 const CHANNEL := "auth.sessions"
 
-## The issuer caps a request; a roster past this is truncated with a warning.
-##
-## Past the cap a report can no longer say "absent means gone" for everybody, and
-## the players it dropped are freed at the issuer. That is the honest failure — a
-## report that stayed silent would hold them all for the lease instead.
+## The issuer caps a request; a longer roster is truncated with a warning, so the dropped players are freed at the issuer rather than silently held for the lease.
 const MAX_REPORTED_PLAYERS := 512
 
 ## Emitted after each report, successful or not.
@@ -62,11 +19,7 @@ signal reported(result: DotResult)
 ## Report on a timer once [method start] has run.
 @export var auto_report: bool = true
 
-## Supplies the current roster at report time: an [Array] of uid [String]s,
-## [DotAuthIdentity]s, or dictionaries with a [code]uid[/code] key.
-##
-## A callable rather than pushed state, so the list is what is true when it is
-## sent and a join that raced a report is in the next one.
+## Supplies the current roster at report time: uid [String]s, [DotAuthIdentity]s, or dictionaries with a [code]uid[/code] key. A callable, so it is what is true when sent.
 var roster_provider: Callable = Callable()
 
 ## How long the goodbye in [method report_offline_now] may hold up a process that is
@@ -203,28 +156,16 @@ func report(roster: Array) -> DotResult:
 	return res
 
 
-## Reports an empty roster and waits for it. Call before shutting down.
-##
-## Without it every player on a server that stops is held at the issuer for the
-## lease, unable to join anywhere else, for no better reason than that nobody
-## said goodbye. Asynchronous: only for a host that keeps the process alive until it
-## returns. One about to quit wants [method report_offline_now].
+## Reports an empty roster and waits for it; call before shutting down. Without it the players are held at the issuer for the lease. An about-to-quit host wants [method report_offline_now].
 func report_offline() -> DotResult:
 	if not _started:
 		return DotResult.success(false)
 	return await report([])
 
 
-## Reports an empty roster [i]synchronously[/i], for a process that is about to end.
+## Reports an empty roster [i]synchronously[/i], for a process about to end, on the calling thread for at most [member offline_timeout_sec].
 ##
-## [method report_offline] goes through [DotHttp], an [HTTPRequest] the tree polls; when
-## the tree is being torn down that node is freed before the issuer answers, and the
-## request may never leave. This drives an [HTTPClient] in a loop on the calling thread
-## for at most [member offline_timeout_sec], so the goodbye is on the wire, and answered,
-## before the call returns. Sends once: a second call before a new roster is a no-op.
-##
-## Not on the web, where [HTTPClient] is [code]fetch()[/code] underneath and cannot be
-## waited for; a browser tab is never a server anyway (it cannot listen).
+## [method report_offline] goes through a node the tree frees first. Sends once. Not on web, where it cannot be waited for.
 func report_offline_now() -> DotResult:
 	if not _started:
 		return DotResult.success(false)
@@ -262,19 +203,7 @@ func report_offline_now() -> DotResult:
 
 ## Reports [param server]'s signed-on players and says goodbye when it stops.
 ##
-## Duck-typed so dot-auth names nothing of dot-server's: anything with a
-## [code]sessions()[/code] list (each answering [code]uid()[/code] and, if it has one,
-## [code]is_authenticated()[/code]), a [code]state_changed[/code] signal and a
-## [code]state_name()[/code] that says [code]SHUTTING_DOWN[/code].
-##
-## [b]Every signed-on session, not only those in play.[/b] A player loading a map, or
-## reloading through a game change, is still on this server; a roster that omitted them
-## would end a confirmed session and let them take a ticket for another server
-## mid-load. Guests are dropped by [method normalise_roster].
-##
-## Keeps a weak reference: the server going away leaves the provider answering
-## [code]null[/code], and a report that does not know the roster is not sent (an
-## empty one would free everybody who is in fact still playing).
+## Duck-typed: needs [code]sessions()[/code], a [code]state_changed[/code] signal and [code]state_name()[/code]. The roster is every signed-on session, not only those in play, or a loading player could take a ticket elsewhere. Holds a weak reference; an unknown roster is not sent (an empty one would free everybody).
 func follow_server(server: Object) -> void:
 	if server == null:
 		return
@@ -406,11 +335,7 @@ func _post_blocking(payload: Dictionary, timeout: float) -> DotResult:
 	return DotResult.success(true)
 
 
-## The uids in a roster, deduplicated, in order, with guests left out.
-##
-## A guest never held a ticket, so the issuer has no session to confirm and
-## nothing a report could end. Sending them would only fill the issuer's table
-## with per-device ids it will never be asked about.
+## The uids in a roster, deduplicated, in order, guests left out (they hold no ticket, so there is nothing to confirm or end).
 static func normalise_roster(roster: Array) -> PackedStringArray:
 	var seen := {}
 	var out := PackedStringArray()

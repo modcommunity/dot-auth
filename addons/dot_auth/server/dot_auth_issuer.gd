@@ -2,39 +2,9 @@
 class_name DotAuthIssuer
 extends Node
 
-## Mints connect tickets. The publisher runs one; game servers do not.
+## Mints connect tickets: the publisher runs one, game servers do not.
 ##
-## The missing piece between "the backbone knows who you are" and "a community
-## game server can find out without holding your account token". A client sends
-## its backbone access token here — first-party, same trust as any of the
-## publisher's own services — and gets back a [DotAuthTicket] scoped to one
-## server, valid for minutes, verifiable offline by anyone with the public key.
-##
-## [b]Operationally.[/b] Run it headless next to whatever else the publisher
-## hosts. It needs the private key and outbound access to the backbone, and it is
-## the only component that needs either. Game-server operators get the public key
-## and nothing else.
-##
-## [codeblock]
-## godot --headless --path . res://examples/issuer.tscn -- \
-##     --auth-issuer-private-key-file keys/issuer.key --auth-server-port 8787
-## [/codeblock]
-##
-## [b]On the built-in HTTP server.[/b] [member listen_port] starts a small
-## [TCPServer]-based endpoint so this runs standalone. It speaks enough HTTP/1.1
-## for one JSON POST and is deliberately not a general web server — no TLS, no
-## keep-alive, no chunked encoding. [b]Put it behind a reverse proxy in
-## production[/b]; that is where TLS, real request limits and access logs belong.
-## Leave the port at 0 and call [method issue_for_token] directly to embed it in
-## something else.
-##
-## [b]On sessions.[/b] Because every ticket passes through here, this is the one
-## place that can know a player is on some server already — and with
-## [member DotAuthConfig.single_session] it refuses a ticket for a second one.
-## A ticket opens a session; a server confirms and later closes it by reporting
-## its roster to [code]POST /session[/code] with a key this issuer holds for it;
-## a player closes their own with [code]POST /session/release[/code]; and a
-## lease closes whatever nobody reported on. See [method report_sessions].
+## A client sends its backbone access token here (first-party trust) and gets a [DotAuthTicket] scoped to one server. It needs the private key and backbone access; operators get only the public key. [member listen_port] starts a minimal HTTP/1.1 listener for one JSON POST (no TLS, keep-alive or chunking), so put it behind a reverse proxy; at 0 call [method issue_for_token] directly. Sessions and usage: docs/rationale.md.
 
 const CHANNEL := "auth.issuer"
 
@@ -53,10 +23,7 @@ signal session_conflict(uid: String, held_server: String, wanted_server: String)
 
 @export var config_file: String = "user://dot_auth_issuer.json"
 
-## Read the signing key from this file instead of [member DotAuthConfig.issuer_private_key].
-##
-## Preferred: a key in a file with restricted permissions beats a key in a config
-## the process might dump into a log.
+## Read the signing key from this file instead of [member DotAuthConfig.issuer_private_key], so it never sits in a config the process might dump to a log.
 @export_global_file("*.key", "*.pem") var private_key_file: String = ""
 
 @export_group("Listener")
@@ -66,22 +33,12 @@ signal session_conflict(uid: String, held_server: String, wanted_server: String)
 
 @export var bind_address: String = "127.0.0.1"
 
-## Server ids this issuer will mint tickets for. Empty allows any.
-##
-## Worth populating. An open issuer will mint a ticket naming any string a caller
-## sends, and a server id nobody controls is a ticket nobody can misuse — but an
-## allow-list also stops a typo'd id from producing tickets that silently never
-## verify anywhere.
+## Server ids this issuer will mint tickets for; empty allows any. Populate it: an open issuer mints a ticket naming any string, and a typo'd id yields tickets that never verify.
 @export var allowed_server_ids: PackedStringArray = PackedStringArray()
 
-## JSON file of [code]{"server id": "key"}[/code]: the servers allowed to report
-## their rosters, and what each presents to prove it is itself.
+## JSON file of [code]{"server id": "key"}[/code]: the servers allowed to report rosters, and what each presents as proof.
 ##
-## A file rather than an inspector field for the same reason the signing key is:
-## these are secrets, and a scene is not where secrets go. One key per server,
-## so a leaked key can be rotated for one operator without touching the rest, and
-## so a report can only ever speak for the server whose key signed it. Add more at
-## runtime with [method add_server_key].
+## A file because these are secrets. One key per server, so a leak rotates for one operator and a report speaks only for the server whose key signed it. See [method add_server_key].
 @export_global_file("*.json") var session_keys_file: String = ""
 
 @export_group("Limits")
@@ -89,25 +46,13 @@ signal session_conflict(uid: String, held_server: String, wanted_server: String)
 ## Tickets per access token per minute.
 @export_range(1, 600, 1) var tickets_per_minute: int = 20
 
-## Largest request body accepted, in bytes.
-##
-## A ticket request is a few dozen bytes. A roster report is a uid per player,
-## and a full server's worth runs to about twenty kilobytes, which is what sets
-## the default.
+## Largest request body accepted, in bytes; a full server's roster runs to about twenty kilobytes, which sets the default.
 @export var max_request_bytes: int = 32768
 
-## Seconds a connection may take to deliver a complete request.
-##
-## Bounds the whole request rather than the gaps between reads: a sender that
-## dribbles one byte per second never looks idle, and would otherwise hold a slot
-## indefinitely while staying under every per-read limit.
+## Seconds a connection may take to deliver a complete request; bounds the whole request, as a sender dribbling a byte a second never looks idle.
 @export_range(1.0, 120.0, 1.0) var request_timeout_sec: float = 10.0
 
-## Connections held at once. Further callers are refused with 503.
-##
-## Refusing beats queueing. Every held connection is polled every frame, so an
-## unbounded list turns a handful of sockets nobody ever writes to into the
-## issuer's frame budget.
+## Connections held at once; further callers get 503. Refusing beats queueing, as every held connection is polled every frame.
 @export_range(1, 4096, 1) var max_connections: int = 64
 
 var _http: DotHttp = null
@@ -122,10 +67,7 @@ var _server_keys: Dictionary = {}
 
 ## uid -> {"server": String, "until": float, "confirmed": bool}
 ##
-## Where each player is, as far as this issuer knows. A session begins
-## unconfirmed when a ticket is minted — the player has said where they are
-## going — and becomes confirmed when that server reports them. The distinction
-## matters for what a report may end: see [method report_sessions].
+## Where each player is as far as this issuer knows: unconfirmed when a ticket is minted, confirmed when that server reports them. See [method report_sessions].
 var _sessions: Dictionary = {}
 var _last_session_sweep: float = 0.0
 var _conflict_count: int = 0
@@ -221,12 +163,8 @@ func start() -> DotResult:
 	return DotResult.success(self)
 
 
-# --- Issuing ---------------------------------------------------------------
 
-## Validates a backbone access token and mints a ticket for [param server_id].
-##
-## The whole operation, without any HTTP of our own — call this directly to embed
-## the issuer in an existing service.
+## Validates a backbone access token and mints a ticket for [param server_id], without HTTP of our own (embed the issuer by calling this).
 func issue_for_token(
 	access_token: String,
 	server_id: String
@@ -250,12 +188,7 @@ func issue_for_token(
 	return issue_for_identity(resolved.value, server_id)
 
 
-## Mints a ticket for a player whose identity is already established.
-##
-## The half of [method issue_for_token] after the backbone has answered. Public
-## so a service that already knows who is asking — the backbone itself, were the
-## issuer folded into it — can mint without a second round trip, and so the
-## session rules can be exercised without a backbone at all.
+## Mints a ticket for a player whose identity is already established; public so a service that knows who is asking can skip the backbone round trip, and so session rules are testable without one.
 func issue_for_identity(
 	identity: DotAuthIdentity,
 	server_id: String
@@ -322,11 +255,7 @@ func issue_for_identity(
 	})
 
 
-## Turns a backbone access token into the identity behind it, or a refusal.
-##
-## Rate-limited per token, so one compromised account cannot exhaust the budget
-## for everyone; the key is hashed so the token itself is not sitting in a
-## dictionary.
+## Turns a backbone access token into the identity behind it, or a refusal. Rate-limited per token on a hashed key, so one compromised account cannot exhaust the budget and the token is not held in a dictionary.
 func _resolve_token(access_token: String) -> DotResult:
 	if access_token.strip_edges() == "":
 		return DotResult.fail(DotError.CODE_AUTH, "No access token.")
@@ -368,7 +297,6 @@ func _resolve_token(access_token: String) -> DotResult:
 	)
 
 
-# --- Sessions --------------------------------------------------------------
 
 ## Registers a server that may report its roster, and the key it presents.
 func add_server_key(server_id: String, key: String) -> DotResult:
@@ -392,11 +320,7 @@ func remove_server_key(server_id: String) -> void:
 	_server_keys.erase(server_id)
 
 
-## Whether [param key] is the key held for [param server_id].
-##
-## An unknown server and a wrong key answer identically, and the comparison is
-## constant-time either way, so a caller learns neither which servers report nor
-## how much of a key it got right.
+## Whether [param key] is the key held for [param server_id]. Unknown server and wrong key answer identically, in constant time, so a caller learns neither which servers report nor how much of a key was right.
 func authorize_server(server_id: String, key: String) -> bool:
 	var expected := str(_server_keys.get(server_id, ""))
 	var known := _server_keys.has(server_id)
@@ -429,21 +353,7 @@ func sessions() -> Dictionary:
 
 ## Takes a server's word for who is on it.
 ##
-## [param uids] is the whole roster, not a change: everyone listed is on
-## [param server_id] as of now, and every [i]confirmed[/i] session on that server
-## not listed has ended. An empty roster is therefore how a server says it is
-## empty, and what [DotAuthSessionReporter] sends on the way down.
-##
-## An unconfirmed session — a ticket minted, nobody arrived yet — is left alone
-## by a report that omits it. The report is truthful (they are not there yet) and
-## acting on it would let a player fetch tickets for two servers in the seconds
-## between the first being minted and the first roster mentioning them. It lapses
-## on its own if they never arrive.
-##
-## A listed player the issuer had on a [i]different[/i] server is moved. The
-## report is the truth about where they are; whatever the record said, they got
-## there somehow, and refusing to believe it would hold them on a server they
-## have left.
+## [param uids] is the whole roster: those listed are on [param server_id] now, and every [i]confirmed[/i] session there not listed has ended. An unconfirmed session is left alone, or a player could fetch tickets for two servers before the first roster mentions them. A listed player recorded elsewhere is moved. Reasoning: docs/rationale.md.
 func report_sessions(server_id: String, uids: PackedStringArray) -> DotResult:
 	if server_id.strip_edges() == "":
 		return DotResult.fail(DotError.CODE_INVALID, "No server id.")
@@ -477,11 +387,7 @@ func report_sessions(server_id: String, uids: PackedStringArray) -> DotResult:
 	return DotResult.success({"held": listed.size(), "ended": ended.size()})
 
 
-## Ends [param uid]'s session, wherever it is. True if there was one.
-##
-## A player leaving is the common case and the one that does not wait for the
-## server's next report. If they are in fact still playing, the next report puts
-## them back.
+## Ends [param uid]'s session, wherever it is; true if there was one. If they are still playing, the server's next report puts them back.
 func release_session(uid: String) -> bool:
 	_sweep_sessions()
 	return _sessions.erase(uid)
@@ -491,9 +397,7 @@ func _hold_session(uid: String, server_id: String, confirmed: bool) -> void:
 	var until := Time.get_unix_time_from_system() + float(config.session_lease_sec)
 	var existing: Variant = _sessions.get(uid)
 
-	# A ticket for the server a confirmed player is already on — a reconnect —
-	# extends the session and does not demote it to unconfirmed, or the next
-	# roster to omit them for a moment would be unable to end it.
+	# A ticket for the server a confirmed player is already on (a reconnect) keeps the session confirmed, or a roster briefly omitting them could not end it.
 	if not confirmed and existing != null \
 		and str((existing as Dictionary)["server"]) == server_id:
 		confirmed = bool((existing as Dictionary)["confirmed"])
@@ -549,7 +453,6 @@ func _load_server_keys() -> DotResult:
 	return DotResult.success(_server_keys.size())
 
 
-# --- Built-in listener -----------------------------------------------------
 
 func _start_listener() -> DotResult:
 	if not DotPlatform.can_listen():
@@ -617,13 +520,7 @@ func _process(_delta: float) -> void:
 
 ## Reads what has arrived and dispatches once a whole request is present.
 ##
-## Returns false when the connection should leave the poll list — dropped,
-## answered, or handed to [method _dispatch].
-##
-## HTTP requests are not delivered one-per-read. Parsing whatever a single poll
-## happened to see treats a segment boundary as the end of the request, which is
-## why the body has to be accumulated and measured against Content-Length rather
-## than assumed complete.
+## Returns false when the connection should leave the poll list. The body is accumulated and measured against Content-Length, since one poll can see a segment boundary, not the request's end.
 func _poll_connection(conn: Dictionary) -> bool:
 	var peer: StreamPeerTCP = conn["peer"]
 	peer.poll()
@@ -764,11 +661,7 @@ func _dispatch(
 	_respond(peer, 200, res.value)
 
 
-## [code]POST /session[/code]: a server's roster, under its own key.
-##
-## The bearer is the server's key rather than a player's token. Rate-limited
-## under the server's name so a stuck reporter cannot crowd out tickets, and
-## refused before the roster is looked at when the key is wrong.
+## [code]POST /session[/code]: a server's roster, under its own key (the bearer), rate-limited under the server's name and refused before the roster is read if the key is wrong.
 func _report_for_server(
 	key: String,
 	server_id: String,
@@ -808,10 +701,7 @@ func _report_for_server(
 	return report_sessions(server_id, uids)
 
 
-## [code]POST /session/release[/code]: a player ending their own session.
-##
-## Resolved through the backbone like a ticket request, so the only session a
-## token can end is the one belonging to the account behind it.
+## [code]POST /session/release[/code]: a player ending their own session, resolved through the backbone so a token can only end its own account's.
 func _release_for_token(access_token: String) -> DotResult:
 	var resolved := await _resolve_token(access_token)
 	if not resolved.ok:
@@ -829,11 +719,7 @@ func _release_for_token(access_token: String) -> DotResult:
 	return DotResult.success({"released": had})
 
 
-## Index of the CRLFCRLF ending the headers, or -1 while they are still arriving.
-##
-## Scanned over the bytes rather than a decoded string: a body split mid-UTF-8
-## decodes to a replacement character, which would shift every later offset and
-## desynchronise the Content-Length arithmetic.
+## Index of the CRLFCRLF ending the headers, or -1 while they are still arriving. Scanned over bytes: a body split mid-UTF-8 decodes to a replacement character and shifts every later offset.
 static func _find_headers_end(buffer: PackedByteArray) -> int:
 	for i in range(0, maxi(0, buffer.size() - 3)):
 		if buffer[i] == 13 and buffer[i + 1] == 10 \

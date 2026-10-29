@@ -2,39 +2,9 @@
 class_name DotLocalProfileClient
 extends RefCounted
 
-## The client half of [DotLocalProfiles]: the secrets this machine holds, per server.
+## The client half of [DotLocalProfiles]: the secrets this machine holds, keyed by SERVER.
 ##
-## A local profile is a credential the SERVER issued, so the client's whole job is
-## to keep it and present it next time. That is small, and it is also the half that
-## is easy to get subtly wrong in a way nobody notices for months — hence a class
-## rather than a paragraph of advice.
-##
-## [codeblock]
-## var keeper := DotLocalProfileClient.at("user://local_profiles.dat")
-## keeper.open()
-##
-## # Joining. Ask with what we hold, or ask for a new one.
-## var credential := keeper.credential_for(server_id)
-## if credential.is_empty():
-##     credential = {"local_profile_new": {"name": chosen_name}}
-##
-## # The server answers a creation with the secret, exactly once.
-## keeper.remember(server_id, id, secret, name)
-## [/codeblock]
-##
-## [b]Keyed by SERVER, and that is the point.[/b] One file holding one secret would
-## mean presenting server A's credential to server B — which fails, so the player
-## would silently be issued a new profile on every server they alternate between and
-## lose the previous one's secret in the process. It is also the property that makes
-## these safe at all: a server learns nothing about a player's identity anywhere
-## else, because there is nothing shared to learn.
-##
-## [b]Encrypted at rest, with the same caveat the token store carries.[/b] On desktop
-## and mobile this is real protection against another user on the machine. On web the
-## key is derived inside the same origin as the ciphertext, so anyone with devtools
-## can recover both — it is tamper-evidence and obfuscation there, and a local
-## profile is worth roughly what a save file is worth, which is the right amount of
-## effort to spend on it.
+## Keyed by server so one server's credential is never presented to another. Encrypted at rest with the token store's caveat: on web the key shares an origin with the ciphertext, so it is obfuscation there. Usage: docs/rationale.md.
 
 const CLIENT_CHANNEL := "auth.local-profile.client"
 
@@ -71,12 +41,7 @@ func open() -> DotResult:
 	)
 
 	if not read.ok:
-		# A file we cannot read is treated as no file, not as a failure to open.
-		#
-		# The realistic causes are a cleared browser origin, a copied user
-		# directory, or an encryption setting that changed — and in every one of
-		# them the player's next join should mint a new profile rather than
-		# refuse to start the game over a save file.
+		# An unreadable file counts as no file: the next join mints a new profile rather than refusing to start.
 		DotLog.warn(
 			CLIENT_CHANNEL,
 			"could not read stored local profiles; starting empty",
@@ -102,11 +67,7 @@ func open() -> DotResult:
 	return DotResult.success(_entries.size())
 
 
-## The credential to present to [param server_id], or [code]{}[/code] if none.
-##
-## Empty means "this machine has never played here" and the caller should offer to
-## make one — which is why it is an empty dictionary rather than a failure: not
-## having an account yet is the normal first state, not an error.
+## The credential to present to [param server_id], or [code]{}[/code] if none (the normal first state, not an error).
 func credential_for(server_id: String) -> Dictionary:
 	if not _opened:
 		open()
@@ -191,13 +152,7 @@ func _save() -> DotResult:
 	return DotPaths.write_encrypted(path, text.to_utf8_buffer(), _passphrase())
 
 
-## A per-installation passphrase.
-##
-## [method OS.get_unique_id] where the platform has one, a constant where it does
-## not — which is web, where it would be pointless anyway because the key and the
-## ciphertext share an origin. Deliberately not a secret the player types: a prompt
-## to unlock a save file is a prompt nobody wants, and the threat this addresses is
-## a curious sibling rather than a determined attacker.
+## A per-installation passphrase: the unique id where there is one, a constant on web (where it would be pointless). Not typed by the player.
 static func _passphrase() -> String:
 	var machine := DotPlatform.unique_id()
 
@@ -215,9 +170,6 @@ func describe() -> Dictionary:
 	}
 
 
-## The client store a [DotAuthConfig] describes: its
-## [member DotAuthConfig.local_profile_client_path]. That knob existed from the
-## start and nothing read it, so every client kept its secrets at the default path
-## whatever the config said.
+## The client store a [DotAuthConfig] describes, from [member DotAuthConfig.local_profile_client_path].
 static func for_config(config: DotAuthConfig) -> DotLocalProfileClient:
 	return DotLocalProfileClient.at(config.local_profile_client_path)

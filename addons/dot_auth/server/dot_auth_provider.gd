@@ -2,45 +2,9 @@
 class_name DotAuthProvider
 extends Resource
 
-## A pluggable way to authenticate a player. Subclass it to add your own.
+## A pluggable way to authenticate a player. Subclass it and register it with [method DotAuthServer.add_provider].
 ##
-## The four built-in strategies on [DotAuthConfig] cover the backbone, first-party
-## introspection, local accounts and guests. They do not cover a store or console
-## platform, a chat service, a publisher's own account service, a LAN token, or a QA
-## bypass — and a game that needs one of those should not have to fork dot-auth.
-##
-## A provider is consulted before the configured strategy, so it can either handle a
-## credential entirely or decline and let the normal path run.
-##
-## [codeblock]
-## class_name PlatformProvider extends DotAuthProvider
-##
-## func _provider_name() -> String: return "platform"
-##
-## func _handles(credential: Dictionary) -> bool:
-##     return credential.has("platform_ticket")
-##
-## func _authenticate(credential: Dictionary) -> DotResult:
-##     var res := await _verify_ticket(credential["platform_ticket"])
-##     if not res.ok:
-##         return res
-##
-##     var identity := DotAuthIdentity.new()
-##     identity.provider = "platform"
-##     identity.provider_id = res.value["account_id"]
-##     identity.uid = "platform:%s" % identity.provider_id
-##     identity.display_name = res.value["display_name"]
-##     return DotResult.success(identity)
-##
-## # once, at startup
-## auth_server.add_provider(PlatformProvider.new())
-## [/codeblock]
-##
-## [b]Namespace your uids.[/b] [member DotAuthIdentity.uid] is what bans and admin
-## entries key on, and two providers that both emit bare numeric ids will collide —
-## two platforms' account ids are both digits, and a ban on one would silently
-## apply to whoever holds the other. Prefix with your provider name, as the built-in
-## ones do.
+## A provider is consulted before the configured strategy and either handles a credential or declines. Namespace your uids ("platform:123"): bans and admin entries key on [member DotAuthIdentity.uid], and bare numeric ids from two providers collide. Worked example: docs/rationale.md.
 
 const CHANNEL := "auth.provider"
 
@@ -52,28 +16,20 @@ const CHANNEL := "auth.provider"
 @export var enabled: bool = true
 
 
-# --- Subclass interface ----------------------------------------------------
 
 ## Short identifier, used in logs and as the [member DotAuthIdentity.provider].
 func _provider_name() -> String:
 	return "custom"
 
 
-## Whether this provider recognises the credential.
-##
-## Keep it cheap and purely structural — "does this dictionary contain my field".
-## The expensive check belongs in [method _authenticate]; a provider that does
-## network work here runs it for every login attempt including ones meant for
-## somebody else.
+## Whether this provider recognises the credential. Keep it cheap and structural; the expensive check belongs in [method _authenticate].
 func _handles(_credential: Dictionary) -> bool:
 	return false
 
 
-## Resolves the credential to a [DotAuthIdentity].
+## Resolves the credential to a [DotAuthIdentity]; may be a coroutine.
 ##
-## May be a coroutine. Return a failure to refuse the login; the server does
-## [b]not[/b] fall through to another provider afterwards, because a provider that
-## claimed a credential and then rejected it has made a decision.
+## A failure refuses the login with no fall-through: a provider that claimed a credential owns the decision.
 func _authenticate(_credential: Dictionary) -> DotResult:
 	return DotResult.fail(
 		DotError.CODE_INTERNAL,
@@ -81,15 +37,11 @@ func _authenticate(_credential: Dictionary) -> DotResult:
 	)
 
 
-## Optional startup check. Return a failure to refuse to register.
-##
-## For a provider that needs an API key or a reachable service — better to fail at
-## boot with a clear reason than on the first player's login.
+## Optional startup check; return a failure to refuse to register (fail at boot, not on the first login).
 func _validate() -> DotResult:
 	return DotResult.success(true)
 
 
-# --- Public API ------------------------------------------------------------
 
 func provider_name() -> String:
 	return _provider_name()

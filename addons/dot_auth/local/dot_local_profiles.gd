@@ -2,54 +2,9 @@
 class_name DotLocalProfiles
 extends RefCounted
 
-## Accounts that live on ONE server and never reach a backbone.
+## Accounts that live on ONE server and never reach a backbone: a visitor names themselves and is the same player next week.
 ##
-## For the deployment that has no cloud and wants one anyway: a LAN server, a
-## friends' server, a game shipped without accounts, a creator who would rather not
-## depend on anybody's identity service. A visitor arrives, names themselves, and is
-## the same player next week — with a profile and an avatar filed on that server's
-## own disk.
-##
-## [b]The identity is a credential this server ISSUES, not something the client
-## claims.[/b] That is the whole design, and every other option was worse:
-##
-## - [b]A name.[/b] What an offline mode does — the uuid is a hash of the
-##   name — and the well-known consequence is that anyone who types your name is
-##   you. Fine among six friends, indefensible on a public server.
-## - [b]A machine id.[/b] [method device_hint] exists and is deliberately NOT the
-##   identity. [method OS.get_unique_id] returns nothing at all on web and iOS, and
-##   a browser is a first-class target here; it is also just a string the client
-##   sends, so it is exactly as forgeable as a name while looking authoritative.
-##   And it is stable across ACCOUNTS as well as installs, so two people sharing a
-##   machine are one player.
-## - [b]A password.[/b] Puts a login form in front of somebody who wanted to play,
-##   and lands a password store on a game server. [method DotAuthServer.hash_password]
-##   already says why that is not something to be proud of.
-##
-## So: on first join the server mints an id and a 32-byte secret, stores only a
-## salted hash of the secret, and hands the secret to the client once. The client
-## keeps it per server and presents it next time. A session cookie, essentially,
-## and for the same reasons.
-##
-## [b]The secret is scoped to one server.[/b] A leak is that server's problem and
-## nobody else's — the same property the whole platform rests on, and the reason
-## this is not "a local account" in the sense of one that works everywhere.
-##
-## [codeblock]
-## var profiles := DotLocalProfiles.at("user://local_profiles.json")
-## profiles.open()
-##
-## var made := profiles.create("Ashley")          # first join
-## # -> {"id": "sWrM4ym4beWFH0Nx1a", "secret": "…"}  send the secret to that client
-##
-## var who := profiles.verify(id, secret)         # every join after
-## [/codeblock]
-##
-## [b]The id is usable as a `user_key` unchanged.[/b] 22 base64url characters, the
-## same shape [DotUserScope] derives and [code]DotAvatarKey.is_usable[/code] accepts
-## — so a local profile files a profile and an avatar through exactly the same store
-## interfaces a backbone-backed one does, and nothing downstream branches on which
-## kind of account it is.
+## The identity is a credential this server ISSUES, never something the client claims (not a name, a machine id or a password). On first join the server mints an id and a 32-byte secret, stores only a salted hash, and hands the secret over once. The secret is scoped to one server, so a leak is that server's problem. The id is a 22-character base64url player key, usable unchanged by the user and avatar stores. Why and usage: docs/rationale.md.
 
 const CHANNEL := "auth.local-profiles"
 
@@ -59,14 +14,7 @@ const ID_LENGTH := 22
 ## Bytes of secret. 256 bits, because it is a bearer credential.
 const SECRET_BYTES := 32
 
-## Rounds of hashing over the stored secret.
-##
-## The secret is 256 random bits, so this is not protecting a guessable password
-## the way [method DotAuthServer.hash_password] is trying to — an offline attack on
-## a full-entropy secret does not terminate. It is here so that a leaked file is not
-## a list of usable credentials, and one round would do; a few thousand costs
-## nothing on a join and closes the case where an operator lets somebody choose
-## their own secret.
+## Rounds of hashing over the stored secret. The secret has 256 random bits, so this only keeps a leaked file from being a list of usable credentials.
 const HASH_ROUNDS := 4096
 
 ## Longest display name a profile may carry.
@@ -78,18 +26,10 @@ const MIN_NAME := 2
 ## Where the file lives.
 var path: String = "user://local_profiles.json"
 
-## Refuse to create more than this many. 0 removes the limit.
-##
-## A server that lets an unauthenticated visitor write a row has handed the disk to
-## the internet. The cap is the backstop; a rate limit on the connection is the
-## first line, and [DotAuthServer] already has one.
+## Refuse to create more than this many; 0 removes the limit. The backstop behind the connection rate limit, as an unauthenticated visitor must not be able to fill the disk.
 var max_profiles: int = 5000
 
-## Whether two profiles may share a display name.
-##
-## Off by default. The name is the only thing other players see, so two "Ashley"s
-## is impersonation with extra steps — the exact problem issuing a secret was meant
-## to solve, reintroduced at the layer people actually look at.
+## Whether two profiles may share a display name. Off by default: two "Ashley"s is impersonation at the layer people look at.
 var allow_duplicate_names: bool = false
 
 var _profiles: Dictionary = {}
@@ -104,14 +44,9 @@ static func at(p_path: String) -> DotLocalProfiles:
 	return s
 
 
-## A machine identifier, where the platform has one.
+## A machine identifier where the platform has one: a hint, never an identity.
 ##
-## [b]Never an identity — a hint.[/b] Empty on web and iOS, which are platforms
-## this family targets, so anything that required it would simply not work there.
-## It is also client-side, so a client can send whatever it likes. Stored on
-## creation and compared on verify only to LOG that a profile moved machine, which
-## is a useful thing for an operator to see and a terrible thing to enforce: people
-## replace computers, and a browser clears its storage on its own schedule.
+## It is empty on web and iOS and client-forgeable. Compared on verify only to LOG a profile moving machine, never to enforce.
 static func device_hint() -> String:
 	var id := DotPlatform.unique_id()
 
@@ -188,14 +123,10 @@ func count() -> int:
 	return _profiles.size()
 
 
-# --- Creating --------------------------------------------------------------
 
-## Mints a profile and returns [code]{"id": …, "secret": …}[/code].
+## Mints a profile and returns [code]{"id": ..., "secret": ...}[/code].
 ##
-## [b]The secret is returned exactly once and is never recoverable.[/b] Only its
-## hash is stored, so a caller that drops it has locked that profile out for good —
-## which is the correct trade, because the alternative is a server holding a list of
-## usable credentials for everybody who ever played on it.
+## The secret is returned once and is not recoverable (only its hash is stored): a server must not hold usable credentials for everyone who ever played.
 func create(name: String, hint: String = "") -> DotResult:
 	if not _opened:
 		var opened := open()
@@ -256,13 +187,8 @@ func create(name: String, hint: String = "") -> DotResult:
 	return DotResult.success({"id": id, "secret": secret})
 
 
-# --- Verifying -------------------------------------------------------------
 
-## Checks a presented (id, secret) pair and returns the stored row.
-##
-## Constant-time on the secret, because the alternative leaks how many leading
-## characters were right and turns guessing into a few hundred attempts per
-## character rather than 2^256 overall.
+## Checks a presented (id, secret) pair and returns the stored row. Constant-time on the secret, or guessing becomes a few hundred tries per character.
 func verify(id: String, secret: String, hint: String = "") -> DotResult:
 	if not _opened:
 		var opened := open()
@@ -346,11 +272,7 @@ func rename(id: String, secret: String, name: String) -> DotResult:
 	return save()
 
 
-## Forgets a profile. The caller decides whether an operator or the owner may.
-##
-## Deliberately does NOT require the secret: this is the endpoint a server console
-## needs, and an operator removing an abusive player's profile does not have their
-## credential. Anything reachable by a PLAYER must check the secret first.
+## Forgets a profile. Does NOT require the secret, as the console needs it; anything a PLAYER can reach must check the secret first.
 func remove(id: String) -> DotResult:
 	if not _profiles.has(id):
 		return DotResult.success(false)
@@ -364,14 +286,8 @@ func remove(id: String) -> DotResult:
 	return saved if not saved.ok else DotResult.success(true)
 
 
-# --- Storage ---------------------------------------------------------------
 
-## Writes the file when anything has changed.
-##
-## Through [method DotPaths.write_json], which writes a temporary file and renames
-## over the target — so an interrupted write loses the change rather than the whole
-## file, which for a file holding every account on the server is the difference
-## between a bad day and a lost one.
+## Writes the file when anything has changed, via [method DotPaths.write_json] (temp file and rename) so an interrupted write cannot lose every account.
 func save() -> DotResult:
 	if not _dirty:
 		return DotResult.success(false)
@@ -398,7 +314,6 @@ func close() -> void:
 	_opened = false
 
 
-# --- Internals -------------------------------------------------------------
 
 func _mint_id() -> String:
 	# Loops because a collision, however unlikely at 132 bits, would overwrite
@@ -424,11 +339,7 @@ func _hash_secret(secret: String, salt: String) -> String:
 	return out
 
 
-## Base64url only, so an id can never become a path segment or a log injection.
-##
-## The same rule [code]DotAvatarKey.is_usable[/code] applies, restated rather than
-## imported: dot-auth does not depend on dot-user-avatar, and the shared shape is
-## what makes them interoperate without one.
+## Base64url only, so an id can never become a path segment or a log injection; the same rule as [code]DotAvatarKey.is_usable[/code], restated because dot-auth does not depend on it.
 static func _is_usable_id(id: String) -> bool:
 	if id.length() < 8 or id.length() > 64:
 		return false

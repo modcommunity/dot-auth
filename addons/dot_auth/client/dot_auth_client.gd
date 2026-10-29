@@ -4,29 +4,7 @@ extends "res://addons/dot_auth/client/dot_auth_client_envelope.gd"
 
 ## Signs a player in against the website-city backbone and keeps them signed in.
 ##
-## Implements the backbone's device-code grant (`/api/app/v1/auth/*`) exactly as
-## `~/types/app-api/contract.ts` defines it: PKCE-protected start, polling with
-## the server's own interval and `slow_down` backoff, and rotating refresh.
-##
-## [b]Why a device flow and not a password field.[/b] A game asking for account
-## credentials trains players to type them into game clients, which is the thing
-## every phishing attempt relies on. The device flow means the password is only
-## ever entered on the website — and it is the only flow that works unchanged on a
-## console, a TV, and a browser build that cannot open a popup.
-##
-## [codeblock]
-## var auth := DotAuthClient.new()
-## add_child(auth)
-## auth.config = my_config
-##
-## auth.device_code_ready.connect(func(user_code, url, _expires):
-##     code_label.text = user_code
-##     OS.shell_open(url))
-##
-## var res := await auth.sign_in()
-## if res.ok:
-##     print("hello ", (res.value as DotAuthIdentity).display_name)
-## [/codeblock]
+## The backbone's device-code grant (`/api/app/v1/auth/*`, per `~/types/app-api/contract.ts`): PKCE start, polling with the server's interval and `slow_down`, rotating refresh. A device flow, not a password field, so the password is only ever typed on the website. Usage: docs/rationale.md.
 
 const CHANNEL := "auth"
 
@@ -67,13 +45,7 @@ signal session_revoked(reason: String)
 ## Refresh the access token in the background before it expires.
 @export var auto_refresh: bool = true
 
-## Accept an identity handed over by an embedding website (browser builds).
-##
-## On by default: a game running inside the TMC player that ignored this would
-## ask a signed-in member to sign in again, which is the failure the handoff
-## exists to remove. Turn it off for a browser build that must not trust its
-## embedder — a game distributed to sites you do not control, where "who is
-## playing" should come from your own backend instead.
+## Accept an identity handed over by an embedding website (browser builds). On by default; turn off for a build that must not trust its embedder.
 @export var web_handoff: bool = true
 
 var store: DotAuthTokenStore = null
@@ -153,12 +125,8 @@ func start() -> DotResult:
 	return DotResult.success(self)
 
 
-# --- Sign in ---------------------------------------------------------------
 
-## Signs the player in, reusing stored credentials when possible.
-##
-## Returns the [DotAuthIdentity]. Starts a device login only when there is nothing
-## to restore, so a returning player never sees a code.
+## Signs the player in, reusing stored credentials when possible; a device login starts only with nothing to restore.
 func sign_in() -> DotResult:
 	if not _started:
 		var s := start()
@@ -170,14 +138,7 @@ func sign_in() -> DotResult:
 			DotError.CODE_STATE, "A sign-in is already in progress."
 		)
 
-	# The page's handoff comes FIRST, ahead of anything stored.
-	#
-	# Not an optimisation — a correctness order. The site is authoritative about
-	# who is at the keyboard right now, and a browser build's store is per
-	# ORIGIN: two members using the same computer, or one member who signed out
-	# of the site and back in as somebody else, would otherwise be seated as
-	# whoever this frame's storage last held. A stored session is the right
-	# fallback and the wrong first answer.
+	# The page's handoff comes FIRST: the site knows who is at the keyboard now, while a browser store is per origin and may hold someone else.
 	if web_handoff and DotAuthWebHandoff.supported():
 		var handed := await try_web_handoff()
 		if handed.ok:
@@ -201,18 +162,9 @@ func sign_in() -> DotResult:
 	return await start_device_login()
 
 
-## Signs in from the code the embedding page handed us, without asking anybody
-## anything.
+## Signs in from the code the embedding page handed us, see [DotAuthWebHandoff].
 ##
-## The browser player's whole point: a member who is already signed into the site
-## is seated as themselves. See [DotAuthWebHandoff] for what the page publishes
-## and why it is a code rather than a token.
-##
-## [b]Every "no" is an ordinary outcome, not a failure to report.[/b] A native
-## build, a page that published nothing, a signed-out visitor, a game whose
-## operator did not turn TMC identity on — all four return a failed [DotResult]
-## that the caller is expected to fall through, which is why [method sign_in]
-## logs it at debug and carries on to the device flow.
+## Every "no" (native build, nothing published, signed-out visitor, TMC identity off) is an ordinary failed [DotResult] for the caller to fall through, which [method sign_in] does at debug level.
 func try_web_handoff(wait_sec: float = 3.0) -> DotResult:
 	if not DotAuthWebHandoff.supported():
 		return DotResult.fail(
@@ -237,12 +189,7 @@ func try_web_handoff(wait_sec: float = 3.0) -> DotResult:
 
 	var redeem_url := str(code_block.get("redeemUrl", ""))
 
-	# The page that handed us a code IS the backbone, so take its origin rather
-	# than the configured one. Without this a game embedded on a staging or
-	# self-hosted deployment redeems fine — the redeem URL is absolute — and then
-	# sends every LATER call (refresh, /me, the avatar) to whatever
-	# `backbone_url` was compiled with, which is the wrong site and a token it
-	# will not recognise.
+	# Take the handing page's origin, not the configured one: it IS the backbone, and otherwise later calls (refresh, /me) go to the compiled-in `backbone_url`.
 	var origin := _origin_of(redeem_url)
 
 	if origin != "" and origin != config.backbone_url.trim_suffix("/"):
@@ -267,22 +214,9 @@ func try_web_handoff(wait_sec: float = 3.0) -> DotResult:
 	return accepted
 
 
-## Signs in from a handoff code a LAUNCHER passed in, on any platform.
+## Signs in from a handoff code a LAUNCHER passed in, on any platform; the native twin of [method try_web_handoff].
 ##
-## The native twin of [method try_web_handoff]: the site mints the same single-use,
-## sixty-second code when the TMC app launches a desktop build, and the app hands it
-## to the process it starts. Redeemed exactly as the page's code is, for a game-scoped
-## credential bound to the app it was minted for.
-##
-## [b]Redeemed at this client's own backbone, never at a URL the launcher names.[/b]
-## The web path may take the page's origin because the page IS the backbone; a native
-## process has no page, and a redeem URL from argv would let whoever wrote a shortcut
-## aim a member's code at a host of their choosing. Point [member DotAuthConfig.backbone_url]
-## at the site that minted it (`--auth-backbone-url`, `DOT_AUTH_BACKBONE_URL` or the
-## JSON file) instead.
-##
-## Every refusal (empty, unknown, expired, already spent) is a failed [DotResult] the
-## caller falls through to a guest on, like every "no" from [method try_web_handoff].
+## Redeemed at this client's own [member DotAuthConfig.backbone_url], never a URL the launcher names, or whoever wrote a shortcut could aim a member's code at their own host. Every refusal is a failed [DotResult] to fall through on.
 func redeem_handoff(code: String) -> DotResult:
 	code = code.strip_edges()
 	if code == "":
@@ -328,14 +262,7 @@ func _redeem_code(redeem_url: String, code: String) -> DotResult:
 	return _accept_tokens(unwrapped.value)
 
 
-## Waits briefly for the page to post its auth block.
-##
-## The block usually arrives while the engine's WASM is still downloading, so
-## this normally returns on its first read. The wait exists for the other order:
-## a loader that posts on frame load can lose the race against a cached export
-## that boots immediately, and a game that gave up on the first frame would seat
-## a signed-in member as a guest for no reason anybody could see.
-## `https://host:port` from a URL, or `""` if it is not one.
+## [code]https://host:port[/code] from a URL, or [code]""[/code] if it is not one.
 static func _origin_of(url: String) -> String:
 	var scheme_end := url.find("://")
 
@@ -351,17 +278,14 @@ static func _origin_of(url: String) -> String:
 	return "" if rest == "" else url.substr(0, scheme_end + 3) + rest
 
 
+## Waits briefly for the page to post its auth block, which can lose the race against a cached export that boots at once.
 func _await_page_auth(wait_sec: float) -> Dictionary:
 	var deadline := Time.get_ticks_msec() + int(maxf(0.0, wait_sec) * 1000.0)
 
 	while true:
 		var auth := DotAuthWebHandoff.read()
 
-		# An empty read is FINAL: the page publishes a `pending` marker while it
-		# is still waiting to be handed a block, so "nothing there" means there
-		# is nobody to hand one over — a top-level tab, or a page that predates
-		# this. Waiting on it would cost every launch outside a player the full
-		# timeout for an answer that will not change.
+		# An empty read is FINAL: the page publishes a `pending` marker while waiting, so nothing there means nobody will hand one over.
 		if auth.is_empty():
 			return {}
 
@@ -547,14 +471,10 @@ func cancel_sign_in() -> void:
 		DotLog.info(CHANNEL, "login cancelled")
 
 
-# --- Tokens ----------------------------------------------------------------
 
 ## Rotates the credential pair.
 ##
-## The backbone retires the old refresh token on every use, so a `token_reuse`
-## response means a retired token came back — either a race, or theft. Either way
-## every device has been signed out and the only correct response is to clear the
-## store and tell the player.
+## The backbone retires the old refresh token on every use, so `token_reuse` means a retired token came back (a race or theft) and every device is signed out: clear the store and tell the player.
 func refresh() -> DotResult:
 	if not store.has_credentials():
 		return DotResult.fail(
@@ -650,10 +570,7 @@ func _accept_tokens(d: Dictionary) -> DotResult:
 	return DotResult.success(_identity)
 
 
-## A valid access token, refreshing first if it is close to expiring.
-##
-## What anything calling the backbone on the player's behalf should use, rather
-## than reading the store directly and racing the refresh.
+## A valid access token, refreshing first if close to expiry; use this rather than the store, which races the refresh.
 func valid_access_token() -> DotResult:
 	if not store.has_credentials():
 		return DotResult.fail(DotError.CODE_AUTH, "Not signed in.")
@@ -694,13 +611,8 @@ func _on_refresh_due() -> void:
 		_refresh_timer.start(60.0)
 
 
-# --- Sign out --------------------------------------------------------------
 
-## Signs out, telling the backbone to retire the whole token family.
-##
-## [param local_only] skips the network call. Correct when the player is offline
-## — a sign-out that fails because there is no connection would be a sign-out
-## that does not happen.
+## Signs out, telling the backbone to retire the whole token family; [param local_only] skips the network call, for when offline.
 func sign_out(local_only: bool = false) -> DotResult:
 	if not local_only and store.has_credentials():
 		var res := await _http.post_json(
@@ -725,7 +637,6 @@ func sign_out(local_only: bool = false) -> DotResult:
 	return DotResult.success(true)
 
 
-# --- Identity --------------------------------------------------------------
 
 func identity() -> DotAuthIdentity:
 	return _identity
@@ -744,10 +655,7 @@ func account_key() -> String:
 	return _identity.uid
 
 
-## Re-reads the player's profile from `/api/app/v1/me`.
-##
-## For picking up a name or avatar change without signing out. Not needed on the
-## join path — the identity from the token response is current enough.
+## Re-reads the player's profile from `/api/app/v1/me`, to pick up a name or avatar change.
 func fetch_profile() -> DotResult:
 	var token := await valid_access_token()
 	if not token.ok:
@@ -775,18 +683,10 @@ func fetch_profile() -> DotResult:
 	return identity_res
 
 
-# --- Connect tickets -------------------------------------------------------
 
-## Asks a ticket issuer for a short-lived credential scoped to one server.
+## Asks a ticket issuer for a short-lived credential scoped to one server, sent under [constant DotAuthConfig.Strategy.TICKET].
 ##
-## This is what a client sends to a game server under
-## [constant DotAuthConfig.Strategy.TICKET]. The point is that the game server
-## learns who you are without ever holding a credential for your site account.
-##
-## [param issuer_url] is the publisher's [DotAuthIssuer]. It is first-party — you
-## are handing it your access token, exactly as you would any of the publisher's
-## own services — and it hands back something scoped, short-lived and useless
-## anywhere else.
+## [param issuer_url] is the publisher's first-party [DotAuthIssuer]; it gets your access token and returns something scoped and useless elsewhere.
 func request_ticket(issuer_url: String, server_id: String) -> DotResult:
 	var token := await valid_access_token()
 	if not token.ok:
@@ -813,12 +713,9 @@ func request_ticket(issuer_url: String, server_id: String) -> DotResult:
 	return DotResult.success(ticket)
 
 
-## Asks for a connect ticket for the server at [param address], the address THIS
-## client dialled ([code]host:port[/code]), never one a server announced: a hostile
-## server naming another's id would get a ticket valid there. [param issuer_url]
-## defaults to [member DotAuthConfig.ticket_issuer_url]; empty means the backbone's
-## own issuer. [param nonce] is the server's challenge nonce for this connection, which
-## binds the ticket to it so a copy is useless elsewhere. Returns the ticket.
+## Asks for a connect ticket for the server at [param address], the address THIS client dialled, never one a server announced (a hostile server naming another's id would get a ticket valid there).
+##
+## [param issuer_url] defaults to [member DotAuthConfig.ticket_issuer_url]; [param nonce] is the server's challenge for this connection and binds the ticket to it.
 func request_ticket_for_address(
 	address: String, issuer_url: String = "", nonce: String = ""
 ) -> DotResult:
@@ -856,7 +753,6 @@ func request_ticket_for_address(
 	return DotResult.success(ticket)
 
 
-# --- Join tokens ------------------------------------------------------------
 
 ## Whether this client treats the server announcing [param audience] as first-party,
 ## i.e. may join it under [constant DotAuthConfig.Strategy.INTROSPECT]. See
@@ -865,14 +761,9 @@ func is_first_party(audience: String) -> bool:
 	return audience != "" and config.first_party_audiences.has(audience)
 
 
-## Mints a single-use join token for ONE server: what an INTROSPECT server is sent in
-## place of the access token, which never leaves this client.
+## Mints a single-use join token for ONE server, sent to an INTROSPECT server in place of the access token (which never leaves this client).
 ##
-## [param audience] is the server's integration target (`server:<id>`, `app:<id>`).
-## The token lives sixty seconds, is spent once, and only the credential that audience
-## names can spend it; every app API route refuses it. Refuses an audience that is not
-## in [member DotAuthConfig.first_party_audiences], so no caller can mint for a server
-## the build does not trust.
+## [param audience] must be in [member DotAuthConfig.first_party_audiences]; the token lasts sixty seconds and only that audience's credential can spend it.
 func request_join_token(audience: String) -> DotResult:
 	if not is_first_party(audience):
 		return DotResult.fail(
@@ -896,17 +787,9 @@ func request_join_token(audience: String) -> DotResult:
 	return DotResult.success(token)
 
 
-## Tells the issuer this player has left whatever server they were on.
+## Tells the issuer this player has left whatever server they were on; call it on disconnect.
 ##
-## The polite half of [member DotAuthConfig.single_session]. The server they
-## left will say so in its next roster report, but that can be a minute away,
-## and a player who quit one server to join another should not spend it being
-## told they are still on the first. Call it on disconnect. Harmless when the
-## rule is off, when there was no session, or when the player is in fact still
-## playing — the server's next report puts them back.
-##
-## Only ever ends the session behind this client's own token; there is no way to
-## name somebody else.
+## The polite half of [member DotAuthConfig.single_session]: the server's own roster report can be a minute away. Harmless when the rule is off or the player is still playing, and it only ends the session behind this client's own token.
 func release_session(issuer_url: String) -> DotResult:
 	var token := await valid_access_token()
 	if not token.ok:
@@ -928,13 +811,7 @@ func release_session(issuer_url: String) -> DotResult:
 	return DotResult.success(released)
 
 
-## The issuer's own refusal, when it sent one, instead of "HTTP 403".
-##
-## The issuer answers with [code]{error, code}[/code] and its message is written
-## for the player — "You are already connected to eu-west-1" is worth showing and
-## "Not allowed." is not. [DotHttp] keeps the body as the error's detail, so it
-## is recoverable without a second request, the same way [method _envelope_code]
-## recovers the backbone's.
+## The issuer's own refusal when it sent one, instead of "HTTP 403": its message is written for the player. [DotHttp] keeps the body as the error's detail.
 func _issuer_refusal(res: DotResult, fallback: String) -> DotResult:
 	if res.ok or res.error == null:
 		return res
@@ -954,15 +831,10 @@ func _issuer_refusal(res: DotResult, fallback: String) -> DotResult:
 	return res.wrap(fallback)
 
 
-# --- The app API, as this player --------------------------------------------
 
-## POSTs to an app API endpoint with this player's own token.
+## POSTs to an app API endpoint with this player's own token, for anything a client reports about ITSELF; [param path] is relative to [code]/api/app/v1/[/code].
 ##
-## The player-side counterpart of [method DotBackboneClient.post_integration]:
-## anything a client reports about ITSELF — its own statistics, a scope key
-## request — goes through here, with the access token the device flow issued
-## and nothing an integration holds. [param path] is relative to
-## [code]/api/app/v1/[/code]. Returns the envelope's [code]data[/code].
+## The player-side counterpart of [method DotBackboneClient.post_integration]. Returns the envelope's [code]data[/code].
 func post_app(path: String, body: Dictionary) -> DotResult:
 	var token := await valid_access_token()
 	if not token.ok:

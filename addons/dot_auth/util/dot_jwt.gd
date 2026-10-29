@@ -1,24 +1,9 @@
 class_name DotJwt
 extends RefCounted
 
-## Compact JWS encoding, signing and verification.
+## Compact JWS encoding, signing and verification for [DotAuthTicket].
 ##
-## Used for [DotAuthTicket] — the short-lived, server-scoped credential a client
-## presents to a game server. A standard format rather than a bespoke one because
-## the properties that make it safe are the ones people get wrong when inventing:
-## the signature covers the exact encoded header and payload, the algorithm is
-## pinned by the verifier rather than read from the token, and expiry is checked
-## against a bounded clock skew.
-##
-## [b]Supported algorithms.[/b] [code]RS256[/code] (RSA-SHA256) and
-## [code]HS256[/code] (HMAC-SHA256), because those are what Godot's [Crypto] and
-## [HMACContext] can do. No EdDSA — the engine has none.
-##
-## [b]RS256 vs HS256.[/b] HS256 is symmetric: whoever can verify can also forge.
-## That is fine when issuer and verifier are the same process, and disqualifying
-## when a ticket issued centrally is verified by hundreds of community game
-## servers — any one of them could then mint tickets for any player. Use RS256 for
-## anything crossing a trust boundary; [DotAuthConfig] warns when you do not.
+## RS256 and HS256 only. HS256 lets any verifier forge, so use RS256 across a trust boundary.
 
 # No log channel: a codec. Every refusal is a DotResult, and a verifier that logged a bad
 # token would write a line per forged request with nobody to name. DotAuthServer, which
@@ -28,14 +13,9 @@ const ALG_RS256 := "RS256"
 const ALG_HS256 := "HS256"
 
 ## Seconds of clock skew tolerated on [code]exp[/code] and [code]nbf[/code].
-##
-## Machine clocks disagree, and a ticket refused because a server is 20 seconds
-## fast is a player who cannot connect for no visible reason. Matches the
-## backbone's own `INTEGRATION_CLOCK_SKEW_SEC` thinking.
 const DEFAULT_LEEWAY_SEC := 60
 
 
-# --- Encoding --------------------------------------------------------------
 
 ## Signs a payload with an RSA private key.
 static func encode_rs256(
@@ -75,10 +55,7 @@ static func encode_rs256(
 	)
 
 
-## Signs a payload with a shared secret.
-##
-## Only safe when issuer and verifier are the same trust domain — see the class
-## documentation.
+## Signs a payload with a shared secret; only safe inside one trust domain.
 static func encode_hs256(payload: Dictionary, secret: String) -> DotResult:
 	if secret.length() < 32:
 		# A short HMAC secret is brute-forceable offline from a single token, and
@@ -101,13 +78,8 @@ static func encode_hs256(payload: Dictionary, secret: String) -> DotResult:
 	)
 
 
-# --- Decoding --------------------------------------------------------------
 
-## Reads a token's claims [b]without verifying anything[/b].
-##
-## For logging and for reading [code]kid[/code] before choosing a key. Never
-## branch on the result for an authorisation decision — an unverified token is a
-## string an attacker wrote.
+## Reads claims [b]without verifying[/b]; never use the result for an authorisation decision.
 static func peek(token: String) -> DotResult:
 	var parts := token.split(".")
 	if parts.size() != 3:
@@ -132,12 +104,7 @@ static func peek(token: String) -> DotResult:
 
 ## Verifies a token against an RSA public key and checks its time claims.
 ##
-## [param expected_algorithm] is pinned by the caller and the token's own
-## [code]alg[/code] must match it. [b]This is the check that matters most.[/b]
-## Trusting the token's algorithm header is the classic JWT vulnerability: a
-## verifier that reads [code]alg[/code] and dispatches on it can be handed
-## [code]{"alg":"none"}[/code], or an HS256 token signed with the RSA public key
-## as the HMAC secret — which is public.
+## [param expected_algorithm] is pinned by the caller and must match the token's [code]alg[/code], or [code]none[/code] and HS256-with-the-public-key forgeries pass.
 static func verify_rs256(
 	token: String,
 	public_key_pem: String,
