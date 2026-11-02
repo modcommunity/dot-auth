@@ -16,7 +16,7 @@ const SECTIONS := 15
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 204
+const CHECKS := 205
 
 
 
@@ -1392,6 +1392,17 @@ func _test_single_session(keys: Dictionary) -> void:
 		"a release with no token is refused",
 		not release_no_bearer.ok and release_no_bearer.error.http_status == 401,
 		release_no_bearer
+	)
+
+	var by_address := await http.post_json(
+		url + "/ticket",
+		{"address": "play.example.com:6005", "nonce": "n"},
+		{"Authorization": "Bearer x"}
+	)
+	_check(
+		"an address/nonce request is refused 400 as id-only",
+		not by_address.ok and by_address.error.http_status == 400,
+		by_address
 	)
 
 	# The server's own reporter, end to end: a roster that lands makes the

@@ -639,6 +639,12 @@ func _dispatch(
 	var server_id := str(request.get("serverId", ""))
 	var res: DotResult = null
 
+	# This issuer is id-only; the by-address shape is the backbone's. Say so, not "no server".
+	if path.begins_with("/ticket") and server_id == "" and (request.has("address") or request.has("nonce")):
+		request_refused.emit("address request", address)
+		_respond(peer, 400, {"error": "This issuer takes {serverId} only, not {address, nonce}.", "code": DotError.CODE_INVALID})
+		return
+
 	if path.begins_with("/ticket"):
 		res = await issue_for_token(token, server_id)
 	elif path.begins_with("/session/release"):
