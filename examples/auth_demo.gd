@@ -1165,19 +1165,7 @@ func _finish() -> void:
 ## One account, one seat, with every way a session can end: server report, player release, lease expiry.
 ##
 ## The roster path runs over a real socket through the issuer's own listener, the one part a unit call cannot reach.
-func _test_single_session(keys: Dictionary) -> void:
-	_section("[b]single session[/b]")
-
-	const PORT := 18787
-	const KEY_A := "server-a-key-0123456789abcdef"
-
-	var ada := DotAuthIdentity.new()
-	ada.uid = "backbone:ada"
-	ada.provider = "backbone"
-	ada.provider_id = "ada"
-	ada.display_name = "Ada"
-
-
+func _check_session_config_refusals(port: int) -> void:
 	var bad := DotAuthConfig.new()
 	bad.strategy = DotAuthConfig.Strategy.ANONYMOUS
 	bad.single_session = true
@@ -1192,13 +1180,28 @@ func _test_single_session(keys: Dictionary) -> void:
 	var unkeyed := DotAuthConfig.new()
 	unkeyed.strategy = DotAuthConfig.Strategy.ANONYMOUS
 	unkeyed.server_id = SERVER_A
-	unkeyed.session_report_url = "http://127.0.0.1:%d" % PORT
+	unkeyed.session_report_url = "http://127.0.0.1:%d" % port
 	_check(
 		"reporting without a key is refused",
 		not unkeyed.validate().ok,
 		null
 	)
 
+
+func _test_single_session(keys: Dictionary) -> void:
+	_section("[b]single session[/b]")
+
+	const PORT := 18787
+	const KEY_A := "server-a-key-0123456789abcdef"
+
+	var ada := DotAuthIdentity.new()
+	ada.uid = "backbone:ada"
+	ada.provider = "backbone"
+	ada.provider_id = "ada"
+	ada.display_name = "Ada"
+
+
+	_check_session_config_refusals(PORT)
 
 	var config := DotAuthConfig.new()
 	config.issuer_private_key = str(keys["private"])

@@ -254,23 +254,11 @@ func _exit_tree() -> void:
 
 ## One JSON POST to the issuer's /session, on this thread, bounded by [param timeout].
 func _post_blocking(payload: Dictionary, timeout: float) -> DotResult:
-	var url := config.session_report_url.strip_edges().trim_suffix("/")
-	var tls := false
-	if url.to_lower().begins_with("https://"):
-		tls = true
-		url = url.substr(8)
-	elif url.to_lower().begins_with("http://"):
-		url = url.substr(7)
-
-	var slash := url.find("/")
-	var host_port := url if slash < 0 else url.substr(0, slash)
-	var prefix := "" if slash < 0 else url.substr(slash)
-	var host := host_port
-	var port := 443 if tls else 80
-	var colon := host_port.rfind(":")
-	if colon > 0 and host_port.substr(colon + 1).is_valid_int():
-		host = host_port.substr(0, colon)
-		port = host_port.substr(colon + 1).to_int()
+	var target := _split_url(config.session_report_url)
+	var tls: bool = target["tls"]
+	var host: String = target["host"]
+	var port: int = target["port"]
+	var prefix: String = target["prefix"]
 
 	var deadline := Time.get_ticks_msec() + int(timeout * 1000.0)
 	var client := HTTPClient.new()
@@ -318,7 +306,33 @@ func _post_blocking(payload: Dictionary, timeout: float) -> DotResult:
 
 	var status := client.get_response_code()
 	client.close()
+	return _status_result(status)
 
+
+## Splits a report URL into tls, host, port and path prefix.
+func _split_url(raw: String) -> Dictionary:
+	var url := raw.strip_edges().trim_suffix("/")
+	var tls := false
+	if url.to_lower().begins_with("https://"):
+		tls = true
+		url = url.substr(8)
+	elif url.to_lower().begins_with("http://"):
+		url = url.substr(7)
+
+	var slash := url.find("/")
+	var host_port := url if slash < 0 else url.substr(0, slash)
+	var prefix := "" if slash < 0 else url.substr(slash)
+	var host := host_port
+	var port := 443 if tls else 80
+	var colon := host_port.rfind(":")
+	if colon > 0 and host_port.substr(colon + 1).is_valid_int():
+		host = host_port.substr(0, colon)
+		port = host_port.substr(colon + 1).to_int()
+	return {"tls": tls, "host": host, "port": port, "prefix": prefix}
+
+
+## The result for the issuer's HTTP status.
+func _status_result(status: int) -> DotResult:
 	if status == 401:
 		var refused := DotError.make(
 			DotError.CODE_AUTH, "The issuer does not recognise this server's key."

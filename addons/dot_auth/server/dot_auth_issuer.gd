@@ -92,30 +92,9 @@ func start() -> DotResult:
 	config.apply_env()
 	config.apply_cli()
 
-	# Read the key from a file when told to. Checked before the inline config
-	# value so a deployment can leave the config in version control.
-	if private_key_file != "":
-		if not FileAccess.file_exists(private_key_file):
-			return DotResult.fail(
-				DotError.CODE_IO,
-				"The signing key file does not exist.",
-				private_key_file
-			)
-		_private_key = FileAccess.get_file_as_string(private_key_file)
-	else:
-		_private_key = config.issuer_private_key
-
-	if _private_key.strip_edges() == "":
-		return DotResult.fail(
-			DotError.CODE_INVALID,
-			"The issuer has no signing key.",
-			"set private_key_file, or DotAuthConfig.issuer_private_key"
-		)
-
-	# Prove the key works now rather than on the first player's join.
-	var probe := DotJwt.encode_rs256({"probe": 1}, _private_key)
-	if not probe.ok:
-		return probe.wrap("The signing key is unusable.")
+	var key := _load_signing_key()
+	if not key.ok:
+		return key
 
 	_http = DotHttp.new()
 	_http.name = "IssuerHttp"
@@ -162,6 +141,34 @@ func start() -> DotResult:
 
 	return DotResult.success(self)
 
+
+## Loads and probes the signing key into [member _private_key].
+func _load_signing_key() -> DotResult:
+	# Read the key from a file when told to. Checked before the inline config
+	# value so a deployment can leave the config in version control.
+	if private_key_file != "":
+		if not FileAccess.file_exists(private_key_file):
+			return DotResult.fail(
+				DotError.CODE_IO,
+				"The signing key file does not exist.",
+				private_key_file
+			)
+		_private_key = FileAccess.get_file_as_string(private_key_file)
+	else:
+		_private_key = config.issuer_private_key
+
+	if _private_key.strip_edges() == "":
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"The issuer has no signing key.",
+			"set private_key_file, or DotAuthConfig.issuer_private_key"
+		)
+
+	# Prove the key works now rather than on the first player's join.
+	var probe := DotJwt.encode_rs256({"probe": 1}, _private_key)
+	if not probe.ok:
+		return probe.wrap("The signing key is unusable.")
+	return DotResult.success(true)
 
 
 ## Validates a backbone access token and mints a ticket for [param server_id], without HTTP of our own (embed the issuer by calling this).

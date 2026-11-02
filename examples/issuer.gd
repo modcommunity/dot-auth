@@ -24,24 +24,8 @@ func _ready() -> void:
 	var private_path := KEY_DIR.path_join("issuer.key")
 	var public_path := KEY_DIR.path_join("issuer.pub")
 
-	if not FileAccess.file_exists(private_path):
-		print("No signing key found; generating one.")
-		var pair := DotCloudSignature_generate()
-		if pair.is_empty():
-			push_error("Could not generate a keypair.")
-			get_tree().quit(1)
-			return
-
-		DotPaths.write_text(private_path, str(pair["private"]))
-		DotPaths.write_text(public_path, str(pair["public"]))
-
-		print("")
-		print("Wrote %s" % private_path)
-		print("Wrote %s" % public_path)
-		print("")
-		print("Give the PUBLIC key to every game server operator. They set it as")
-		print("DotAuthConfig.ticket_public_key. Keep the private key here.")
-		print("")
+	if not _ensure_keys(private_path, public_path):
+		return
 
 	var config := DotAuthConfig.new()
 	config.apply_env()
@@ -100,6 +84,29 @@ func _ready() -> void:
 		print("Exiting in %.0f seconds (--seconds)." % _seconds)
 		await get_tree().create_timer(_seconds).timeout
 		_shut_down("--seconds elapsed")
+
+
+## Generates the keypair on first run; false when it could not.
+func _ensure_keys(private_path: String, public_path: String) -> bool:
+	if not FileAccess.file_exists(private_path):
+		print("No signing key found; generating one.")
+		var pair := DotCloudSignature_generate()
+		if pair.is_empty():
+			push_error("Could not generate a keypair.")
+			get_tree().quit(1)
+			return false
+
+		DotPaths.write_text(private_path, str(pair["private"]))
+		DotPaths.write_text(public_path, str(pair["public"]))
+
+		print("")
+		print("Wrote %s" % private_path)
+		print("Wrote %s" % public_path)
+		print("")
+		print("Give the PUBLIC key to every game server operator. They set it as")
+		print("DotAuthConfig.ticket_public_key. Keep the private key here.")
+		print("")
+	return true
 
 
 func _shut_down(reason: String) -> void:
