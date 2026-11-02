@@ -3,7 +3,7 @@ extends RefCounted
 
 ## The browser player's identity handoff: the site hands the game a single-use code, never a token.
 ##
-## NOTHING HERE MAY USE [method DotWeb.eval]: under a `script-src 'self' 'wasm-unsafe-eval'` policy it fails silently and signs nobody in. Off-web every function answers "nothing to do"; games call [DotAuthClient.try_web_handoff]. Why: docs/rationale.md.
+## NOTHING HERE MAY USE `DotWeb.eval`: under a `script-src 'self' 'wasm-unsafe-eval'` policy it fails silently and signs nobody in. Off-web every function answers "nothing to do"; games call [DotAuthClient.try_web_handoff]. Why: docs/rationale.md.
 
 # No log channel: static reads of one page global. Whether a missing or pending block
 # matters is the auth client's decision, and it is the one that logs how a player
