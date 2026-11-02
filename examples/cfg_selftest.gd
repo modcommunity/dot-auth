@@ -7,8 +7,12 @@ const FOLDER := "dot_auth"
 const FILE := "auth.yml"
 const LEGACY := "user://dot_auth_cfg_selftest_legacy"
 
+const SECTIONS := 1
+const CHECKS := 10
+
 var _passed := 0
 var _failed := 0
+var _sections := 0
 
 
 func _ready() -> void:
@@ -59,7 +63,12 @@ func _run() -> void:
 
 	_clean(addon_dir, server_dir)
 	DotCfgLegacy.reset()
-	print("%d passed, %d failed" % [_passed, _failed])
+	_sections += 1
+	print("%d sections, %d passed, %d failed" % [_sections, _passed, _failed])
+	if _sections != SECTIONS or _passed + _failed != CHECKS:
+		print("ERROR: %d of %d sections, %d of %d checks ran." % [_sections, SECTIONS, _passed + _failed, CHECKS])
+		get_tree().quit(1)
+		return
 	get_tree().quit(1 if _failed > 0 else 0)
 
 
