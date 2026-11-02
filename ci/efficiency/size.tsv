@@ -2,8 +2,6 @@
 # Baselines only shrink: scripts/<gate> --update lowers or drops entries and refuses to add.
 addons/dot_auth/client/dot_auth_client.gd	880
 addons/dot_auth/server/dot_auth_issuer.gd	807
-examples/auth_demo.gd	1488
-examples/auth_demo.gd::_test_refusals_are_logged	108
 examples/auth_demo.gd::_test_scoped_introspect	88
 examples/auth_demo.gd::_test_single_session	298
 examples/auth_demo.gd::_test_tickets	172
