@@ -170,6 +170,22 @@ func _test_refusals_are_logged() -> void:
 		null
 	)
 
+	await _refusals_run_escalates(server, records)
+
+	server.queue_free()
+	DirAccess.remove_absolute(path)
+
+	await _refusals_verifier_down(records)
+
+	DotLog.signals().record.disconnect(capture)
+	DotLog.clear_channel_level(DotAuthServer.CHANNEL)
+	DotLog.print_to_stdout = printing
+	_line("")
+	_done()
+
+
+
+func _refusals_run_escalates(server: DotAuthServer, records: Array[Dictionary]) -> void:
 	# A run with nobody getting in is escalated once, and a real sign-in ends the run.
 	var warns := func() -> int:
 		return records.filter(func(r: Dictionary) -> bool:
@@ -185,9 +201,8 @@ func _test_refusals_are_logged() -> void:
 		await server.authenticate({"username": "grace", "password": "no"}, "10.0.3.%d" % i)
 	_check("once, not on every refusal after", warns.call() == 1, null)
 
-	server.queue_free()
-	DirAccess.remove_absolute(path)
 
+func _refusals_verifier_down(records: Array[Dictionary]) -> void:
 	# A verifier that cannot be reached: WARN once, however many joins it refuses.
 	var down := DotAuthConfig.new()
 	down.strategy = DotAuthConfig.Strategy.INTROSPECT
@@ -211,13 +226,6 @@ func _test_refusals_are_logged() -> void:
 		first
 	)
 	remote.queue_free()
-
-	DotLog.signals().record.disconnect(capture)
-	DotLog.clear_channel_level(DotAuthServer.CHANNEL)
-	DotLog.print_to_stdout = printing
-	_line("")
-	_done()
-
 
 
 func _test_admin_source() -> void:
