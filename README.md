@@ -123,7 +123,7 @@ The id is a 22-character player key of the same shape everything else here uses,
 godot --headless --path . res://examples/auth_demo.tscn
 ```
 
-47 offline checks covering ticket minting and verification, audience scoping, replay refusal, expiry and clock skew, tamper detection, JWT algorithm confusion, PKCE derivation, local accounts (including username-enumeration resistance), the admin mapping, and encrypted token storage.
+205 offline checks (plus 10 in the cfg self-test and 33 in the session-reporter self-test) covering ticket minting and verification, audience scoping, replay refusal, expiry and clock skew, tamper detection, JWT algorithm confusion, PKCE derivation, local accounts (including username-enumeration resistance), the admin mapping, and encrypted token storage.
 
 Run an issuer with `res://examples/issuer.tscn`.
 
