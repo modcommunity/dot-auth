@@ -1,6 +1,6 @@
 # The backbone: contracts and the URL
 
-The family's view of website-city is in [game-dev/docs/backbone.md](../../../docs/backbone.md); this is dot-auth's half.
+The family's view of website-city is in [docs/backbone.md](../../../docs/backbone.md); this is dot-auth's half.
 
 ## Contracts this code depends on
 
