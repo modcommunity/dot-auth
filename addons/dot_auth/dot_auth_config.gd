@@ -32,6 +32,9 @@ enum Strategy {
 ## Entries are `server:<id>` or `app:<id>`, the [member join_audience] a server announces. The join token is redeemable only by the credential its audience names, so a server claiming another's audience gains nothing. Client-side: ship it in the build's config.
 @export var first_party_audiences: PackedStringArray = PackedStringArray()
 
+## Off by default. When on, [method DotAuthClient.request_join_token] given the host and port being dialled sends them as `address`, and refuses a reply that does not echo `addressVerified` (an old backbone, or one that did not check the address): the backbone then mints for a first-party server only if that server really is at that address, so a relay cannot pass itself off as it.
+@export var bind_join_address: bool = false
+
 ## Client name shown on the backbone's device-approval screen; a label the backbone does not trust but the player reads, so use the game's name.
 @export var client_name: String = "dot game"
 

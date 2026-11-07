@@ -764,7 +764,9 @@ func is_first_party(audience: String) -> bool:
 ## Mints a single-use join token for ONE server, sent to an INTROSPECT server in place of the access token (which never leaves this client).
 ##
 ## [param audience] must be in [member DotAuthConfig.first_party_audiences]; the token lasts sixty seconds and only that audience's credential can spend it.
-func request_join_token(audience: String) -> DotResult:
+##
+## With [member DotAuthConfig.bind_join_address] on and a [param host] and [param port] given, they go to the backbone as `address` and the reply must carry `addressVerified`; without them (or with the flag off) the request is the old one.
+func request_join_token(audience: String, host: String = "", port: int = 0) -> DotResult:
 	if not is_first_party(audience):
 		return DotResult.fail(
 			DotError.CODE_FORBIDDEN,
@@ -772,11 +774,27 @@ func request_join_token(audience: String) -> DotResult:
 			"audience %s is not in first_party_audiences" % audience
 		)
 
-	var res := await post_app("play/join-token", {"audience": audience})
+	var bound := config.bind_join_address and host != "" and port > 0
+	var body := {"audience": audience}
+	if bound:
+		body["address"] = {"host": host, "port": port}
+
+	var res := await post_app("play/join-token", body)
 	if not res.ok:
 		return res
 
-	var d: Variant = res.value
+	return join_token_from_reply(res.value, audience, bound)
+
+
+## Reads a join-token reply. When [param bound], a reply without `addressVerified == true` is refused.
+func join_token_from_reply(d: Variant, audience: String, bound: bool) -> DotResult:
+	if bound and not (d is Dictionary and (d as Dictionary).get("addressVerified", false) == true):
+		return DotResult.fail(
+			DotError.CODE_FORBIDDEN,
+			"The backbone did not confirm this server is at the address dialled.",
+			"join-token reply lacks addressVerified"
+		)
+
 	var token := str((d as Dictionary).get("token", "")) if d is Dictionary else ""
 	if not token.begins_with("tmc_jt_"):
 		return DotResult.fail(

@@ -16,7 +16,7 @@ const SECTIONS := 15
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 205
+const CHECKS := 211
 
 
 
@@ -157,6 +157,21 @@ func _test_scoped_introspect() -> void:
 	var refused: DotResult = await client.request_join_token("server:43")
 	_check("and no join token is requested for it",
 		not refused.ok and refused.error.code == DotError.CODE_FORBIDDEN, refused)
+	# Address binding (default off): refuse a reply that does not echo addressVerified.
+	_check("address binding is off by default", not client_config.bind_join_address, null)
+	var ok_reply := {"token": "tmc_jt_abc", "addressVerified": true}
+	var old_reply := {"token": "tmc_jt_abc"}
+	_check("off: an old reply is accepted",
+		client.join_token_from_reply(old_reply, "server:42", false).ok, null)
+	_check("on: a verified reply is accepted",
+		client.join_token_from_reply(ok_reply, "server:42", true).ok, null)
+	var unverified: DotResult = client.join_token_from_reply(old_reply, "server:42", true)
+	_check("on: a reply lacking addressVerified is refused",
+		not unverified.ok and unverified.error.code == DotError.CODE_FORBIDDEN, unverified)
+	_check("on: addressVerified false is refused",
+		not client.join_token_from_reply({"token": "tmc_jt_abc", "addressVerified": false}, "server:42", true).ok, null)
+	_check("on: a non-object reply is refused",
+		not client.join_token_from_reply("x", "server:42", true).ok, null)
 	client.free()
 	_done()
 
