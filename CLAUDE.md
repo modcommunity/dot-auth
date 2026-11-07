@@ -37,7 +37,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) and [docs/backbone.md](../../docs/b
 
 ## Running and testing
 
-- The family's two steps ([game-dev/CLAUDE.md](../../CLAUDE.md#validating-anything)), then `godot --headless --path . res://examples/auth_demo.tscn` and `timeout 120 godot --headless --path . res://examples/session_reporter_selftest.tscn`. Each exits non-zero on any failure. auth_demo covers everything but the device flow itself, which needs a live backbone and a person clicking Approve.
+- The family's two steps ([family CLAUDE.md](../../CLAUDE.md#validating-anything)), then `godot --headless --path . res://examples/auth_demo.tscn` and `timeout 120 godot --headless --path . res://examples/session_reporter_selftest.tscn`. Each exits non-zero on any failure. auth_demo covers everything but the device flow itself, which needs a live backbone and a person clicking Approve.
 - **Add a case to the demo for any change to the ticket, JWT or admin-mapping paths**: a bug there is a vulnerability rather than a crash.
 - Changing the issuer's listener: drive it with a socket that writes headers and body separately; one `curl` passes either way. [tickets](docs/tickets.md#running-the-issuer)
 
