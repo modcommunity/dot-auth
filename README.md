@@ -1,24 +1,11 @@
-This is the **authentication** asset for TMC's **Dot** collection. It is how a player signs in, and how a game server learns who they are without ever being handed their account.
+# dot-auth
 
-This collection of assets provides modular building blocks for creating games and applications within the TMC ecosystem, ensuring consistency and interoperability across all `dot-*` assets. This includes core functionality, networking, authentication, cloud integration, and more.
-
-**These assets are COMPLETELY OPEN SOURCE**. You are free to use, modify, and distribute them under the terms of the MIT license. The only thing not open source is the back-end web infrastructure. So if you opt into using your own authentication backend instead of integrating with TMC, you will need to build and integrate your own back-end infrastructure.
-
-## From Maintainer & WARNING
-This asset, along with all the others, was built initially with **Claude Code** and will continue to be maintained and extended using it. This is because I (`gamemann`) cannot build the entire TMC platform alone (I wish I could lol).
-
-**Please treat this as partially tested.** Every asset has its own headless test suite and those suites pass, but very little of this has been in front of real players yet. Expect rough edges, and please report anything you run into.
-
-I intend on reviewing code, testing, and editing documentation regularly. If you're interested in helping out, please let me know!
-
-## Authentication for Games and Dedicated Servers
-Open-source authentication for Godot 4 games and dedicated servers. Signs players in against a web backbone, then proves who they are to a game server **without handing that server a credential for their account**.
-
-Part of the `dot-*` family alongside [dot-core](https://github.com/modcommunity/dot-core), [dot-server](https://github.com/modcommunity/dot-server) and [dot-cloud](https://github.com/modcommunity/dot-cloud).
+Sign-in for Godot 4.7+ games and dedicated servers. A player signs in against a web back end, and a game server learns who they are without ever being handed a credential for their account. Part of the [dot-*](https://github.com/modcommunity) family, alongside [dot-core](https://github.com/modcommunity/dot-core), [dot-server](https://github.com/modcommunity/dot-server) and [dot-cloud](https://github.com/modcommunity/dot-cloud).
 
 ## Install
 
-Copy `addons/dot_core/` and `addons/dot_auth/` into your project and enable both in *Project → Project Settings → Plugins*. Requires Godot 4.7+.
+1. Copy `addons/dot_core/` and `addons/dot_auth/` into your project.
+2. Enable both in *Project > Project Settings > Plugins*.
 
 ## Client
 
@@ -38,7 +25,7 @@ if res.ok:
     print("hello ", (res.value as DotAuthIdentity).display_name)
 ```
 
-A device-code flow, not a password field, so the password is only ever typed on the website, and the same code works on desktop, mobile, console and in a browser. Returning players never see a code: `sign_in()` restores from a stored rotating refresh token.
+Sign-in uses a device code, so the password is only typed on the website, and the same flow works on desktop, mobile, console and in a browser. Returning players do not see a code: `sign_in()` restores the session from a stored refresh token.
 
 ## Server
 
@@ -56,45 +43,46 @@ if not res.ok:
 var identity: DotAuthIdentity = res.value
 ```
 
-Verification is offline, with no backbone round trip per join.
-
-The addon's defaults live in `cfg/addons/dot_auth/auth.yml`, a game overrides them in `cfg/game/<game>/dot_auth/` and the operator in `cfg/server/addons/dot_auth/` or `cfg/server/game/<game>/dot_auth/` (strongest; see [dot-core's addon-config.md](https://github.com/modcommunity/dot-core/blob/main/docs/addon-config.md)): `DotAuthConfig.new().load_cfg()` reads both, then `DOT_AUTH_*` and `--auth-*`. A flat `cfg/auth.yml` is still read with one WARN until 2026-12-31. Secrets (`issuer_private_key`, `integration_token`, `session_report_key`) are read from a file only, never from the environment or command line.
+Tickets are checked offline, with no back-end request per join.
 
 ## Why tickets
 
-A community server that receives a player's account token can act as that player on the whole site. So instead:
+A community server that receives a player's account token could act as that player on the whole site. Instead:
 
 ```
-client ──(device-code + PKCE)──> backbone         who am I
-client ──(access token)────────> DotAuthIssuer    first-party, publisher-run
-client <──(signed ticket)─────── DotAuthIssuer    one server, a few minutes
-client ──(ticket)──────────────> game server      verified offline
+client --(device code + PKCE)--> back end         who am I
+client --(access token)-------> DotAuthIssuer     publisher-run
+client <-(signed ticket)------- DotAuthIssuer     one server, a few minutes
+client --(ticket)-------------> game server       verified offline
 ```
 
-The ticket is audience-scoped, short-lived, single-use and RSA-signed. A server can verify it but cannot mint one, and a ticket captured on one server is refused by every other. `DotAuthIssuer` is the only component that needs the private key, and it runs standalone with no changes to the backbone.
+A ticket is scoped to one server, short-lived, single-use and RSA-signed. A server can verify a ticket but cannot create one, and a ticket captured on one server is refused by all others. Only `DotAuthIssuer` needs the private key. See [docs/tickets.md](docs/tickets.md).
 
-## Four strategies
+## Strategies
 
-| | |
+Set `config.strategy` to one of these.
+
+| Strategy | Use for |
 | --- | --- |
-| `TICKET` | Public servers. The above. |
-| `INTROSPECT` | First-party servers only. The client sends a single-use join token, and only to audiences in `first_party_audiences` ([strategies](docs/strategies.md#introspect-never-hands-a-server-the-access-token)). Warns at startup. |
-| `LOCAL` | LAN and development. Accounts in a JSON file. |
-| `ANONYMOUS` | Everyone is a guest. Bans cannot mean anything. Warns. |
+| `TICKET` | Public servers (the flow above). |
+| `INTROSPECT` | First-party servers only. The client sends a single-use join token, and only to audiences in `first_party_audiences`. Warns at startup. See [docs/strategies.md](docs/strategies.md). |
+| `LOCAL` | LAN and development. Accounts live in a JSON file. |
+| `ANONYMOUS` | Everyone is a guest, so bans mean nothing. Warns at startup. |
 
-Plus **local profiles**, which are a provider rather than a strategy and so work alongside any of them. See below.
+Local profiles (below) work alongside any strategy.
 
-## Accounts with no cloud
+## Local profiles (no cloud)
 
-Not every game wants an identity service, and not every player has an account. `allow_local_profiles` lets a visitor make one that lives on **that server and nowhere else**, with a profile and an avatar, persisting between visits.
+Not every game needs an identity service. With `allow_local_profiles` a visitor can create a profile that lives on that server only, and keeps it between visits.
 
 ```gdscript
-config.allow_local_profiles = true          # server
+# Server
+config.allow_local_profiles = true
 config.local_profiles_path = "user://profiles.json"
 ```
 
 ```gdscript
-# Client: present what we hold for this server, or ask for a new one.
+# Client: present what we hold for this server, or ask for a new profile.
 var keeper := DotLocalProfileClient.at("user://local_profiles.dat")
 keeper.open()
 
@@ -102,35 +90,43 @@ var credential := keeper.credential_for(server_id)
 if credential.is_empty():
     credential = {"local_profile_new": {"name": chosen_name}}
 
-# The server issues the secret exactly once; keep it or the profile is lost.
+# The server issues the secret once. Keep it, or the profile is lost.
 keeper.remember(server_id, id, secret, name)
 ```
 
-It is a **provider**, not a strategy, so it composes: a server can accept backbone tickets and local profiles at once.
+The server issues the credential. The client does not just claim a name, so typing someone else's name does not make you them. A machine id is deliberately not used, because it is client-supplied and empty on web and iOS. A server can accept back-end tickets and local profiles at the same time.
 
-**The server issues the credential. The client does not claim an identity.** That is the difference between this and offline-mode accounts elsewhere, where the name *is* the identity and anyone who types yours is you. A machine id is deliberately not used: `OS.get_unique_id()` is empty on web and iOS, it is client-supplied and so exactly as forgeable as a name, and it is shared by everyone using that computer. It is recorded as a hint and only ever logged.
+## Configuration
 
-The id is a 22-character player key of the same shape everything else here uses, so dot-user and dot-user-avatar file a local player's profile and avatar through their ordinary local backends. **A complete platform, with no backbone.**
+Defaults live in `cfg/addons/dot_auth/auth.yml`. A game overrides them in `cfg/game/<game>/dot_auth/`, and the server operator in `cfg/server/addons/dot_auth/` or `cfg/server/game/<game>/dot_auth/` (strongest). See [dot-core's addon-config.md](https://github.com/modcommunity/dot-core/blob/main/docs/addon-config.md).
+
+`DotAuthConfig.new().load_cfg()` reads these files, then `DOT_AUTH_*` environment variables and `--auth-*` command-line flags. Secrets (`issuer_private_key`, `integration_token`, `session_report_key`) are read from a file only, never from the environment or command line.
 
 ## Also included
 
-- **`DotBackboneClient`** reports a dedicated server's own player count, map and roster to its site listing, with the replay protection the integration API requires.
-- **`DotAuthAdminSource`** maps site groups, roles and claims to dot-server permission flags and immunity levels, so "everyone in the site group `moderators` can kick here" is one rule instead of a hand-edited user list. Guests never receive permissions; site roles grant nothing unless you map them.
+| Class | What it does |
+| --- | --- |
+| `DotBackboneClient` | Reports a dedicated server's player count, map and roster to its site listing, with replay protection. |
+| `DotAuthAdminSource` | Maps site groups, roles and claims to dot-server permission flags and immunity levels. Guests never get permissions, and site roles grant nothing unless you map them. |
 
 ## Try it
 
 ```bash
 godot --headless --path . res://examples/auth_demo.tscn
+godot --headless --path . res://examples/cfg_selftest.tscn
+godot --headless --path . res://examples/session_reporter_selftest.tscn
 ```
 
-205 offline checks (plus 10 in the cfg self-test and 33 in the session-reporter self-test) covering ticket minting and verification, audience scoping, replay refusal, expiry and clock skew, tamper detection, JWT algorithm confusion, PKCE derivation, local accounts (including username-enumeration resistance), the admin mapping, and encrypted token storage.
+The demo is an offline self-test. It exits non-zero on any failure. Run a ticket issuer with `res://examples/issuer.tscn`.
 
-Run an issuer with `res://examples/issuer.tscn`.
+## Limits to know about
 
-## Honest limits
+`DotAuthServer.hash_password` is salted SHA-256, not argon2, because Godot has no password KDF. It only keeps a LAN server from storing plaintext. Real accounts belong on the back end. On web, token-store encryption is obfuscation, because the key and the ciphertext share an origin. See [docs/security.md](docs/security.md#two-things-that-are-weaker-than-they-look).
 
-`DotAuthServer.hash_password` is salted SHA-256, not argon2, because Godot ships no password KDF. It exists so a LAN server does not store plaintext; real accounts belong on the backbone. And on web the token store's encryption is obfuscation, because the key and the ciphertext share one origin. Both are documented where they matter in [docs/security.md](docs/security.md#two-things-that-are-weaker-than-they-look).
+## Status
+
+Built and maintained with Claude Code. The test suites pass, but little of this has been in front of real players yet. Please report rough edges by opening an issue.
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Only the TMC back-end web infrastructure is not open source; if you use your own back end, you build that part yourself.
