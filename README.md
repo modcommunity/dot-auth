@@ -1,5 +1,3 @@
-# dot-auth
-
 Sign-in for Godot 4.7+ games and dedicated servers. A player signs in against a web back end, and a game server learns who they are without ever being handed a credential for their account. Part of the [dot-*](https://github.com/modcommunity) family, alongside [dot-core](https://github.com/modcommunity/dot-core), [dot-server](https://github.com/modcommunity/dot-server) and [dot-cloud](https://github.com/modcommunity/dot-cloud).
 
 ## Install
