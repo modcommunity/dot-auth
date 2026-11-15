@@ -1,4 +1,4 @@
-Sign-in for Godot 4.7+ games and dedicated servers. A player signs in against a web back end, and a game server learns who they are without ever being handed a credential for their account. Part of the [dot-*](https://github.com/modcommunity) family, alongside [dot-core](https://github.com/modcommunity/dot-core), [dot-server](https://github.com/modcommunity/dot-server) and [dot-cloud](https://github.com/modcommunity/dot-cloud).
+Sign-in for Godot 4.7+ games and dedicated servers. A player signs in against a web back end, and a game server learns who they are without ever being handed a credential for their account. Part of the [dot-*](https://github.com/gamespice-platform) family, alongside [dot-core](https://github.com/gamespice-platform/core), [dot-server](https://github.com/gamespice-platform/server) and [dot-cloud](https://github.com/gamespice-platform/cloud).
 
 ## Install
 
@@ -96,7 +96,7 @@ The server issues the credential. The client does not just claim a name, so typi
 
 ## Configuration
 
-Defaults live in `cfg/addon/dot_auth/auth.yml`. A game overrides them in `cfg/game/<game>/dot_auth/`, and the server operator in `cfg/server/addon/dot_auth/` or `cfg/server/game/<game>/dot_auth/` (strongest). See [dot-core's addon-config.md](https://github.com/modcommunity/dot-core/blob/main/docs/addon-config.md).
+Defaults live in `cfg/addon/dot_auth/auth.yml`. A game overrides them in `cfg/game/<game>/dot_auth/`, and the server operator in `cfg/server/addon/dot_auth/` or `cfg/server/game/<game>/dot_auth/` (strongest). See [dot-core's addon-config.md](https://github.com/gamespice-platform/core/blob/main/docs/addon-config.md).
 
 `DotAuthConfig.new().load_cfg()` reads these files, then `DOT_AUTH_*` environment variables and `--auth-*` command-line flags. Secrets (`issuer_private_key`, `integration_token`, `session_report_key`) are read from a file only, never from the environment or command line.
 
