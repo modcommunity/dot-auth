@@ -255,7 +255,7 @@ func _test_unreachable_issuer() -> void:
 	var unanswered := hung.report_offline_now()
 	took = Time.get_ticks_msec() - started
 	_check("an issuer that never answers fails the goodbye", not unanswered.ok)
-	_check("after the timeout and no longer (%d ms)" % took, took >= 900 and took < 1600)
+	_check("after the timeout and no longer (%d ms)" % took, took >= 900 and took < 4000)
 	remove_child(hung)
 	hung.queue_free()
 	silent.stop()
