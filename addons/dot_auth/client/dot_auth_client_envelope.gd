@@ -98,3 +98,23 @@ static func _envelope_of(detail: String) -> Variant:
 	if json.parse(detail) != OK:
 		return null
 	return json.data
+
+
+## The issuer's own refusal when it sent one, instead of "HTTP 403": its message is written for the player. [DotHttp] keeps the body as the error's detail.
+func _issuer_refusal(res: DotResult, fallback: String) -> DotResult:
+	if res.ok or res.error == null:
+		return res
+
+	var parsed: Variant = _envelope_of(res.error.detail)
+	if parsed is Dictionary and (parsed as Dictionary).has("error"):
+		var body := parsed as Dictionary
+		var err := DotError.make(
+			str(body.get("code", res.error.code)),
+			str(body["error"]),
+			fallback
+		)
+		err.http_status = res.error.http_status
+		err.retry_after = res.error.retry_after
+		return DotResult.failure(err)
+
+	return res.wrap(fallback)

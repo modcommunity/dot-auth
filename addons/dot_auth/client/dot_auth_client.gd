@@ -125,7 +125,6 @@ func start() -> DotResult:
 	return DotResult.success(self)
 
 
-
 ## Signs the player in, reusing stored credentials when possible; a device login starts only with nothing to restore.
 func sign_in() -> DotResult:
 	if not _started:
@@ -471,7 +470,6 @@ func cancel_sign_in() -> void:
 		DotLog.info(CHANNEL, "login cancelled")
 
 
-
 ## Rotates the credential pair.
 ##
 ## The backbone retires the old refresh token on every use, so `token_reuse` means a retired token came back (a race or theft) and every device is signed out: clear the store and tell the player.
@@ -611,7 +609,6 @@ func _on_refresh_due() -> void:
 		_refresh_timer.start(60.0)
 
 
-
 ## Signs out, telling the backbone to retire the whole token family; [param local_only] skips the network call, for when offline.
 func sign_out(local_only: bool = false) -> DotResult:
 	if not local_only and store.has_credentials():
@@ -635,7 +632,6 @@ func sign_out(local_only: bool = false) -> DotResult:
 	signed_out.emit()
 
 	return DotResult.success(true)
-
 
 
 func identity() -> DotAuthIdentity:
@@ -681,7 +677,6 @@ func fetch_profile() -> DotResult:
 		_identity = identity_res.value
 
 	return identity_res
-
 
 
 ## Asks a ticket issuer for a short-lived credential scoped to one server, sent under [constant DotAuthConfig.Strategy.TICKET].
@@ -753,7 +748,6 @@ func request_ticket_for_address(
 	return DotResult.success(ticket)
 
 
-
 ## Whether this client treats the server announcing [param audience] as first-party,
 ## i.e. may join it under [constant DotAuthConfig.Strategy.INTROSPECT]. See
 ## [member DotAuthConfig.first_party_audiences].
@@ -761,9 +755,7 @@ func is_first_party(audience: String) -> bool:
 	return audience != "" and config.first_party_audiences.has(audience)
 
 
-## Mints a single-use join token for ONE server, sent to an INTROSPECT server in place of the access token (which never leaves this client).
-##
-## [param audience] must be in [member DotAuthConfig.first_party_audiences]; the token lasts sixty seconds and only that audience's credential can spend it.
+## Mints a single-use join token for ONE server, sent to an INTROSPECT server in place of the access token (which never leaves this client). [param audience] must be in [member DotAuthConfig.first_party_audiences]; the token lasts sixty seconds and only that audience's credential can spend it.
 ##
 ## With [member DotAuthConfig.bind_join_address] on and a [param host] and [param port] given, they go to the backbone as `address` and the reply must carry `addressVerified`; without them (or with the flag off) the request is the old one.
 func request_join_token(audience: String, host: String = "", port: int = 0) -> DotResult:
@@ -827,27 +819,6 @@ func release_session(issuer_url: String) -> DotResult:
 
 	DotLog.debug(CHANNEL, "session released", {"had_one": released})
 	return DotResult.success(released)
-
-
-## The issuer's own refusal when it sent one, instead of "HTTP 403": its message is written for the player. [DotHttp] keeps the body as the error's detail.
-func _issuer_refusal(res: DotResult, fallback: String) -> DotResult:
-	if res.ok or res.error == null:
-		return res
-
-	var parsed: Variant = _envelope_of(res.error.detail)
-	if parsed is Dictionary and (parsed as Dictionary).has("error"):
-		var body := parsed as Dictionary
-		var err := DotError.make(
-			str(body.get("code", res.error.code)),
-			str(body["error"]),
-			fallback
-		)
-		err.http_status = res.error.http_status
-		err.retry_after = res.error.retry_after
-		return DotResult.failure(err)
-
-	return res.wrap(fallback)
-
 
 
 ## POSTs to an app API endpoint with this player's own token, for anything a client reports about ITSELF; [param path] is relative to [code]/api/app/v1/[/code].

@@ -147,6 +147,12 @@ func _test_scoped_introspect() -> void:
 		not unresolvable.ok and unresolvable.error.code == DotError.CODE_STATE, unresolvable)
 	bare.queue_free()
 
+	await _test_join_client_half()
+	_done()
+
+
+## The client half of join tokens: what it mints, and which replies it accepts.
+func _test_join_client_half() -> void:
 	# The client half: nothing is minted for a server the build does not list.
 	var client_config := DotAuthConfig.new()
 	client_config.first_party_audiences = PackedStringArray(["server:42"])
@@ -173,7 +179,6 @@ func _test_scoped_introspect() -> void:
 	_check("on: a non-object reply is refused",
 		not client.join_token_from_reply("x", "server:42", true).ok, null)
 	client.free()
-	_done()
 
 
 
