@@ -11,12 +11,12 @@ const SERVER_B := "us-east-2"
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose.
-const SECTIONS := 15
+const SECTIONS := 16
 
 ## Every check this suite runs, including the two at the end that compare the counts. The
 ## section counter cannot see a section that aborted after announcing itself — its remaining
 ## checks simply never run — and a total can. See docs/testing.md.
-const CHECKS := 211
+const CHECKS := 219
 
 
 
@@ -47,6 +47,7 @@ func _run() -> void:
 	await _test_local_profiles()
 	await _test_single_session(keys)
 	await _test_backbone_registry()
+	await _test_backbone_nonce_retry()
 	_test_app_refusal()
 	await _test_scoped_introspect()
 	await _test_audience_discovery()

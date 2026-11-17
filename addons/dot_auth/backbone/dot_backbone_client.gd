@@ -27,6 +27,14 @@ signal reported(kind: String, result: DotResult)
 ## Report automatically on a timer once [method start] has run.
 @export var auto_report: bool = true
 
+## Retries after a retryable failure (transport, 5xx, 429); 0 sends once.
+##
+## Retried HERE, not in [DotHttp]: every attempt needs its own [code]ts[/code] and
+## [code]nonce[/code], because the backbone remembers a nonce and refuses it the second
+## time. DotHttp resending the same bytes turned a real 500 into a 400 "Unauthorized" on
+## the retry, and the 500 was never logged.
+@export_range(0, 10, 1, "or_greater") var max_retries: int = 2
+
 var _http: DotHttp = null
 var _timer: Timer = null
 var _limiter: DotRateLimiter = null
@@ -65,7 +73,8 @@ func start() -> DotResult:
 	_http = DotHttp.new()
 	_http.name = "BackboneHttp"
 	_http.timeout_sec = 15.0
-	_http.max_retries = 2
+	# Signed requests are retried by _signed(), re-stamped each time; see max_retries.
+	_http.max_retries = 0
 	add_child(_http)
 
 	# A local ceiling so a bug — a retry loop, a stuck timer — cannot get the
@@ -147,11 +156,7 @@ func report_stats(stats: Dictionary) -> DotResult:
 	if not body.has("dedicated"):
 		body["dedicated"] = DotPlatform.is_headless()
 
-	_stamp(body)
-
-	var res := await _http.post_json(
-		config.server_stats_endpoint(), body, _headers()
-	)
+	var res := await _signed_post(config.server_stats_endpoint(), body)
 
 	_note(res, "stats")
 	reported.emit("stats", res)
@@ -214,11 +219,7 @@ func report_users(
 		"setCount": set_count and not truncated,
 	}
 
-	_stamp(body)
-
-	var res := await _http.post_json(
-		config.server_users_endpoint(), body, _headers()
-	)
+	var res := await _signed_post(config.server_users_endpoint(), body)
 
 	_note(res, "users")
 	reported.emit("users", res)
@@ -240,10 +241,10 @@ func lookup_user(
 	if steam_id != "":
 		query += "&steamId=%s" % steam_id.uri_encode()
 
-	return await _http.get_json(
-		config.integration_endpoint("user/lookup") + "?" + query,
-		_headers()
-	)
+	var url := config.integration_endpoint("user/lookup") + "?" + query
+	var send := func() -> DotResult:
+		return await _http.get_json(url, _headers())
+	return await _signed(send, "user/lookup")
 
 
 ## POSTs to an arbitrary integration endpoint, with stamping and headers applied (the party endpoints, say).
@@ -256,12 +257,7 @@ func post_integration(path: String, body: Dictionary) -> DotResult:
 			DotError.CODE_RATE_LIMITED, "Local backbone request limit reached."
 		)
 
-	var payload := body.duplicate()
-	_stamp(payload)
-
-	return await _http.post_json(
-		config.integration_endpoint(path), payload, _headers()
-	)
+	return await _signed_post(config.integration_endpoint(path), body)
 
 
 ## GETs an arbitrary integration endpoint; [code]ts[/code] goes in [param query] and the nonce in the header, as a GET has no body.
@@ -274,13 +270,12 @@ func get_integration(path: String, query: Dictionary = {}) -> DotResult:
 			DotError.CODE_RATE_LIMITED, "Local backbone request limit reached."
 		)
 
-	var params := query.duplicate()
-	params["ts"] = int(Time.get_unix_time_from_system())
-
-	return await _http.get_json(
-		config.integration_endpoint(path) + "?" + encode_query(params),
-		_headers()
-	)
+	var endpoint := config.integration_endpoint(path)
+	var send := func() -> DotResult:
+		var params := query.duplicate()
+		params["ts"] = int(Time.get_unix_time_from_system())
+		return await _http.get_json(endpoint + "?" + encode_query(params), _headers())
+	return await _signed(send, path)
 
 
 ## `a=1&b=two`, every key and value URI-encoded.
@@ -290,6 +285,65 @@ static func encode_query(params: Dictionary) -> String:
 		parts.append("%s=%s" % [str(key).uri_encode(), str(params[key]).uri_encode()])
 	return "&".join(parts)
 
+
+
+## POSTs [param body] stamped afresh on every attempt; [param body] itself is not changed.
+func _signed_post(url: String, body: Dictionary) -> DotResult:
+	var send := func() -> DotResult:
+		var payload := body.duplicate()
+		_stamp(payload)
+		return await _http.post_json(url, payload, _headers())
+	return await _signed(send, url)
+
+
+## Runs [param send] (one attempt, which must stamp a new [code]ts[/code] and nonce each call)
+## until it succeeds, fails for good, or [member max_retries] are spent.
+##
+## A failure after retries keeps the FIRST failure in its detail and context
+## ([code]first_http[/code], [code]first_error[/code], [code]attempts[/code]): the first is
+## usually the real fault, and a later one is often only its echo.
+func _signed(send: Callable, what: String) -> DotResult:
+	var first: DotResult = null
+	var res: DotResult = null
+	var attempt := 0
+
+	while true:
+		attempt += 1
+		res = await send.call()
+
+		if res.ok:
+			return res
+
+		if first == null:
+			first = res
+
+		if not _worth_retry(res) or attempt > max_retries:
+			break
+
+		var delay := _http._backoff_delay(attempt, res.error)
+		DotLog.debug(CHANNEL, "retrying with a new nonce", {
+			"what": what.get_slice("?", 0), "attempt": attempt, "in": "%.2fs" % delay,
+			"http": res.error.http_status, "why": res.code(),
+		})
+		if is_inside_tree():
+			await get_tree().create_timer(delay).timeout
+
+	if attempt > 1 and first != res and res.error != null and first.error != null:
+		res.error.context["attempts"] = attempt
+		res.error.context["first_http"] = first.error.http_status
+		res.error.context["first_error"] = str(first.error)
+		var first_line := "first of %d attempts: %s" % [attempt, str(first.error)]
+		res.error.detail = first_line if res.error.detail == "" else "%s; %s" % [res.error.detail, first_line]
+
+	return res
+
+
+## Transport errors, 5xx and 429 are retried; any other 4xx is a refusal, and resending it only spends the rate limit.
+static func _worth_retry(res: DotResult) -> bool:
+	if not res.is_retryable():
+		return false
+	var status := res.error.http_status
+	return status == 0 or status == 429 or status >= 500
 
 
 ## Adds the replay-protection fields; [code]ts[/code] is Unix [b]seconds[/b], and the backbone refuses milliseconds loudly.

@@ -37,6 +37,89 @@ func _test_backbone_registry() -> void:
 
 
 
+## A retry is a new request: the backbone refuses a nonce it has seen, so a resent body turns a 500 into a 400 that hides it.
+func _test_backbone_nonce_retry() -> void:
+	_line("")
+	_section("[b]backbone retries[/b]")
+
+	var config := DotAuthConfig.new()
+	config.integration_token = "tmci_selftest_not_a_real_token"
+	config.report_interval_sec = 0.0
+
+	var client := DotBackboneClient.new()
+	client.config = config
+	client.auto_report = false
+	client.max_retries = 2
+	add_child(client)
+	var started := client.start()
+	_check("the client starts", started.ok, started)
+
+	var stub := NonceStub.new()
+	stub.retry_base_sec = 0.05
+	stub.retry_jitter = 0.0
+	client._http.queue_free()
+	client._http = stub
+	client.add_child(stub)
+
+	stub.statuses = [500, 200]
+	var body := {"name": "ach"}
+	var res: DotResult = await client.post_integration("achievements/define", body)
+	_check("a 500 then a 200 succeeds", res.ok and stub.seen.size() == 2, res)
+	_check(
+		"each attempt carries its own nonce",
+		stub.seen.size() == 2 and stub.seen[0].nonce != stub.seen[1].nonce
+			and stub.seen[0].header != stub.seen[1].header and stub.seen[0].nonce != "",
+		DotResult.success(null)
+	)
+	_check("the caller's body is not stamped", not body.has("nonce"), DotResult.success(null))
+
+	stub.seen.clear()
+	stub.statuses = [500, 502, 400]
+	res = await client.post_integration("achievements/define", {})
+	_check(
+		"the last failure keeps the first one's status",
+		not res.ok and res.error.http_status == 400 and res.error.context.get("first_http") == 500
+			and res.error.context.get("attempts") == 3,
+		res
+	)
+	_check(
+		"and its body, where the log prints it",
+		not res.ok and "boom_500" in res.error.detail and "boom_400" in res.error.detail,
+		res
+	)
+
+	stub.seen.clear()
+	stub.statuses = [400]
+	res = await client.post_integration("achievements/define", {})
+	_check(
+		"a 400 is not retried",
+		not res.ok and stub.seen.size() == 1 and not res.error.context.has("first_http"),
+		res
+	)
+
+	stub.seen.clear()
+	stub.statuses = [503, 503, 503, 503]
+	res = await client.post_integration("achievements/define", {})
+	_check("max_retries bounds the attempts", not res.ok and stub.seen.size() == 3, res)
+
+	client.queue_free()
+	await get_tree().process_frame
+	_done()
+
+
+## Answers post_json from a script of statuses and records each attempt's nonces.
+class NonceStub extends DotHttp:
+	var statuses: Array = []
+	var seen: Array[Dictionary] = []
+
+	func post_json(_path: String, body: Variant, headers: Dictionary = {}) -> DotResult:
+		seen.append({"nonce": str(body.get("nonce", "")), "header": str(headers.get("x-tmc-nonce", ""))})
+		var status: int = statuses.pop_front() if not statuses.is_empty() else 200
+		if status == 200:
+			return DotResult.success({"ok": true})
+		return DotResult.failure(DotError.from_http(status, "{\"code\":\"boom_%d\"}" % status))
+
+
 ## website-city refuses flat: `{ok: false, code, message, retryAfter?}`; the site's code must survive through post_app/get_app, not the fallback text.
 func _test_app_refusal() -> void:
 	_line("")

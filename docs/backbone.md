@@ -28,6 +28,7 @@ Details that are easy to get wrong and are already handled:
 - **`token_reuse` on refresh is not a generic error.** The backbone has signed every device out. `DotAuthClient` clears the store and emits `session_revoked` so the UI can show a security notice.
 - **`ClientInfoSchema.platform` has no `web` member.** A browser build reports `unknown` via `DotPlatform.backbone_platform()` rather than failing validation.
 - **Integration requests need `ts` (Unix *seconds*) and `nonce`.** Milliseconds are refused by the backbone's skew window. `DotBackboneClient._stamp()` is the only place this is done.
+- **A retry is a new request with a new nonce.** The backbone refuses a nonce it has seen, so `DotHttp`'s own retry (which resends the same bytes) is off for the backbone client, and `DotBackboneClient` retries transport errors, 5xx and 429 itself (`max_retries`, 0 = never), stamping each attempt. A failure after retries keeps the first one's status and body in its detail and context (`first_http`, `first_error`, `attempts`): the first is usually the real fault.
 - **Roster reports are absolute, not incremental.** An empty list closes every session, so a server that does not know its roster must not call the endpoint. When the list is truncated at 512, `setCount` is forced off, or it would report a count lower than the truth every tick.
 - **`SERVER_STATS` and `SERVER_USERS` are separate scopes** on purpose: a player list is personal data about third parties. `report_roster` is off by default.
 
