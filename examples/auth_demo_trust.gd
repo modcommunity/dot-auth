@@ -491,3 +491,38 @@ func _discovery_server(backbone: DotBackboneClient) -> DotAuthServer:
 	server.backbone = backbone
 	return server
 
+
+
+## A site with no signing key publishes `keys: []`: the server adopts nothing, keeps refusing signed-in joins, and says why.
+func _test_empty_ticket_keys(keys: Dictionary) -> void:
+	_line("")
+	_section("[b]a site that publishes no ticket keys[/b]")
+	var config := DotAuthConfig.new()
+	config.strategy = DotAuthConfig.Strategy.TICKET
+	config.adopt_ticket_trust = true
+	config.allow_guests = false
+	config.backbone_url = "https://site.example"
+	config.server_id = "3550523"
+	var server := DotAuthServer.new()
+	server.config = config
+	server.config_file = ""
+	server.register_service = false
+	add_child(server)
+	server._http = EmptyKeysStub.new()
+	var res := await server.refresh_ticket_keys(true)
+	_check("an empty list is a refusal, not an adoption",
+		not res.ok and res.error.code == DotError.CODE_STATE, res)
+	_check("nothing is trusted", config.ticket_public_keys.is_empty() and not server.ticket_trust_ready(), null)
+	var ada: DotAuthIdentity = DotAuthIdentity.from_scoped_user(
+		{"key": "Kq3_scopedKey-forThis1", "name": "Ada", "username": "ada"}).value
+	var ticket := str(DotAuthTicket.issue(ada, "3550523", str(keys["private"]), "tmc-site", 120, "k1").value)
+	var joined := server._authenticate_ticket({"ticket": ticket})
+	_check("a signed ticket is refused, never accepted unverified", not joined.ok, joined)
+	server.queue_free()
+	_done()
+
+
+## Answers the keys fetch with the empty list a site without a signing key publishes.
+class EmptyKeysStub extends DotHttp:
+	func get_json(_path: String, _headers: Dictionary = {}) -> DotResult:
+		return DotResult.success({"ok": true, "data": {"issuer": "tmc-site", "keys": [], "revoked": [], "refreshSec": 900}})

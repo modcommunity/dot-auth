@@ -112,7 +112,15 @@ func refresh_ticket_keys(force: bool = false) -> DotResult:
 	_apply_keys_refresh(parse_ticket_refresh_sec(res.value))
 	var ring := parse_ticket_keys(res.value)
 	if ring.is_empty():
-		DotLog.warn(CHANNEL, "the backbone publishes no ticket keys yet", {"url": url})
+		DotLog.warn(CHANNEL, "the site's key list is empty, so signed-in joins stay refused", {
+			"url": url, "keys_held": config.ticket_public_keys.size(),
+			"meaning": "the site has no connect-ticket signing key configured (its "
+				+ "CONNECT_TICKET_PRIVATE_KEY is unset), so it cannot issue tickets either; "
+				+ "this server fails closed, trusts nothing and retries every %d s"
+				% int(_keys_refresh_sec),
+			"fix": "the site operator sets CONNECT_TICKET_PRIVATE_KEY and restarts the site; "
+				+ "no change is needed on this server",
+		})
 		return DotResult.fail(DotError.CODE_STATE, "The site publishes no ticket keys.")
 	return adopt_ticket_trust("", ring)
 
