@@ -1,4 +1,4 @@
-[![dot-auth - GameSpice addon](docs/banner.png)](https://moddingcommunity.com/a/204-dot-auth)
+[![Auth - GameSpice addon](docs/banner.png)](https://moddingcommunity.com/a/204-dot-auth)
 
 Sign-in for Godot 4.7+ games and dedicated servers. A player signs in against a web back end, and a game server learns who they are without ever being handed a credential for their account. Part of the [dot-*](https://github.com/gamespice-platform) family, alongside [dot-core](https://github.com/gamespice-platform/core), [dot-server](https://github.com/gamespice-platform/server) and [dot-cloud](https://github.com/gamespice-platform/cloud).
 
