@@ -1,4 +1,4 @@
-# dot-auth
+# GameSpice Auth
 
 Open-source authentication for Godot games and dedicated servers, wired to the website-city backbone. A client signs in to the backbone with the device flow; a publisher-run issuer turns that into a short-lived ticket for ONE server; the server verifies it offline. Plus LAN accounts, self-service local profiles, guests, pluggable providers, server self-reporting to the backbone, and site groups mapped to server admin flags.
 
@@ -28,7 +28,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) and [docs/backbone.md](../../docs/b
 | `addons/dot_auth/local/` | `DotLocalProfiles`, `DotLocalProfileProvider`, `DotLocalProfileClient` (the client's secrets, keyed by server) |
 | `addons/dot_auth/server/` | `DotAuthTicket` (read the class doc), `DotAuthIssuer` (minting and the session table), `DotAuthSessionReporter`, `DotAuthProvider`, `DotAuthServer` (registers as `dot_auth_server`) |
 | `addons/dot_auth/backbone/` | `DotBackboneClient`: server self-reporting; `post_integration` / `get_integration` are the seams other addons use |
-| `addons/dot_auth/bridge/` | `DotAuthAdminSource`: site groups to server permission flags, duck-typed for dot-server |
+| `addons/dot_auth/bridge/` | `DotAuthAdminSource`: site groups to server permission flags, duck-typed for GameSpice Server |
 | `addons/dot_auth/dot_auth_api.gd` | the API level (`LEVEL`, `OLDEST`); the bump rule is on `DotAddonApi` |
 | `examples/auth_demo.tscn` | the suite, offline (binds `127.0.0.1:18787` for the issuer's listener; skips those checks with a line if the port is taken) |
 | `examples/cfg_selftest.tscn` | `auth.yml` from `cfg/addons/dot_auth/`, `cfg/server/addons/dot_auth/` over it, the flat `cfg/auth.yml` shim (WARN once, removed 2026-12-31); secrets stay file-only |
@@ -77,7 +77,7 @@ Read the family [CLAUDE.md](../../CLAUDE.md) and [docs/backbone.md](../../docs/b
 | --- | --- |
 | How a server authenticates | `DotAuthConfig.strategy`, `allow_guests`, `allow_local_profiles` |
 | A new sign-in method | `DotAuthProvider` subclass, `auth_server.add_provider(...)` |
-| One seat per account | `DotAuthConfig.single_session` on the issuer; `session_report_url` / `_key` on the server (the auth server builds the reporter); `create_session_reporter = false` plus your own `roster_provider` for a host without dot-server |
+| One seat per account | `DotAuthConfig.single_session` on the issuer; `session_report_url` / `_key` on the server (the auth server builds the reporter); `create_session_reporter = false` plus your own `roster_provider` for a host without GameSpice Server |
 | Which site groups are admins | `DotAuthAdminSource` and `role_flags` |
 | Where the backbone is | `backbone_url` via env, argv or JSON (web: a shipped JSON file) |
 | What a server reports to the site | `DotBackboneClient.report_stats` / `report_users`, `report_roster` |

@@ -6,7 +6,7 @@ Bugs worth recognising if they come back. The rule each left is in the topic doc
 
 `DotAuthConfig.backbone_url` once shipped as a name that was not TMC's site (`moddingcommunity.com`, the only name website-city has ever used) and was, when found, not registered to anybody: no A record, no NS. Every deployment that did not override it aimed its device-code grant at a name any stranger could buy. It failed loudly only because the name did not resolve; the day somebody registered it, it would have started failing quietly instead.
 
-It had also travelled: the wrong name was in the README, CLAUDE.md, `examples/issuer.gd` and both of dot-user-avatar's, because they were all written from the default. Found by opening the browser client and reading the network tab. **Nothing in any suite looks at what URL was dialled, and a headless run never dials one.**
+It had also travelled: the wrong name was in the README, CLAUDE.md, `examples/issuer.gd` and both of GameSpice User Avatar's, because they were all written from the default. Found by opening the browser client and reading the network tab. **Nothing in any suite looks at what URL was dialled, and a headless run never dials one.**
 
 ## The issuer's listener
 

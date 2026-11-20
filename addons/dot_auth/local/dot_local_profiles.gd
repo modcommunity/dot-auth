@@ -339,7 +339,7 @@ func _hash_secret(secret: String, salt: String) -> String:
 	return out
 
 
-## Base64url only, so an id can never become a path segment or a log injection; the same rule as [code]DotAvatarKey.is_usable[/code], restated because dot-auth does not depend on it.
+## Base64url only, so an id can never become a path segment or a log injection; the same rule as [code]DotAvatarKey.is_usable[/code], restated because GameSpice Auth does not depend on it.
 static func _is_usable_id(id: String) -> bool:
 	if id.length() < 8 or id.length() > 64:
 		return false

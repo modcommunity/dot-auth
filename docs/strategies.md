@@ -18,7 +18,7 @@ Anything a client sends a game server reaches its operator, and the account acce
 - **Server:** with a `backbone`, it announces `join_audience` in the challenge (`DotAuthServer.join_audience()`: `DotAuthConfig.join_audience` if pinned, else the target `integration/v1/me` names) and resolves what arrives through `player/introspect`. The site maps `join_token_required` (an old client sent its access token) and `wrong_audience` to sentences. With no backbone a join token fails in words; `/me` is only the legacy path for old clients. A `ticket` is verified too when `ticket_public_key` is set.
 - **Client** (`DotClientLink._attach_introspect`): it mints a join token (`DotAuthClient.request_join_token`, `POST /api/app/v1/play/join-token`) only when the announced audience is in `DotAuthConfig.first_party_audiences`. Otherwise it sends a connect ticket if the build has an issuer, and if not it fails the join as `forbidden`. It never sends `valid_access_token()`.
 - A join token is `tmc_jt_`-prefixed, lives 60 s, is spent once, and only the credential its audience names can spend it. A server that lies about its audience gains nothing, so the first-party list is defence in depth, not the only guard.
-- **Compatibility:** the site refuses DEVICE tokens at introspect, so a client older than API level 5 cannot join an INTROSPECT server (`Your game needs an update`). A new client on a server that does not announce `join_audience` (older dot-server or dot-auth, or no backbone) falls back to a ticket or a refusal. Web builds' GAME tokens are still accepted at their own app's servers.
+- **Compatibility:** the site refuses DEVICE tokens at introspect, so a client older than API level 5 cannot join an INTROSPECT server (`Your game needs an update`). A new client on a server that does not announce `join_audience` (older GameSpice Server or GameSpice Auth, or no backbone) falls back to a ticket or a refusal. Web builds' GAME tokens are still accepted at their own app's servers.
 
 `allow_guests` layers a guest fallback onto any strategy, and warns, because a banned player can always return as a different guest.
 
@@ -40,15 +40,15 @@ Every alternative was worse, and each is written down in `DotLocalProfiles` beca
 
 ### Three things that are load-bearing
 
-- **The secret travels on `profile_created`, never on the identity.** An identity is *relayed* (dot-server sends one to every player in the match so they can draw each other's names), so a secret on it would be broadcast to the lobby. The signal fires synchronously inside `authenticate()`, so the peer being admitted is unambiguous. The demo asserts the secret does not appear in `identity.to_dict()`.
+- **The secret travels on `profile_created`, never on the identity.** An identity is *relayed* (GameSpice Server sends one to every player in the match so they can draw each other's names), so a secret on it would be broadcast to the lobby. The signal fires synchronously inside `authenticate()`, so the peer being admitted is unambiguous. The demo asserts the secret does not appear in `identity.to_dict()`.
 - **An unknown id and a wrong secret answer identically.** Distinguishing them hands an attacker the list of ids that exist.
 - **Sign-in and sign-up are separate credentials**: `local_profile` versus `local_profile_new`. Folding them into "create it if the id is unknown" turns every mistyped or lost credential into a brand new profile, and a player whose secret was lost silently becomes a stranger with their own name taken.
 
 ### The id is a player key, unchanged
 
-22 base64url characters: the shape `DotUserScope` derives and `DotAvatarKey.is_usable` accepts. So a local profile files a profile and an avatar through exactly the same store interfaces a backbone-backed player does, and **nothing downstream branches on which kind of account it is**: point dot-user and dot-user-avatar at their `local` backends and the whole platform works with no backbone at all.
+22 base64url characters: the shape `DotUserScope` derives and `DotAvatarKey.is_usable` accepts. So a local profile files a profile and an avatar through exactly the same store interfaces a backbone-backed player does, and **nothing downstream branches on which kind of account it is**: point GameSpice User and GameSpice User Avatar at their `local` backends and the whole platform works with no backbone at all.
 
-The demo restates the key-shape check as `DotAvatarKeyShape` rather than calling dot-user-avatar's, because that agreement between two addons that never import each other is the thing being tested.
+The demo restates the key-shape check as `DotAvatarKeyShape` rather than calling GameSpice User Avatar's, because that agreement between two addons that never import each other is the thing being tested.
 
 ## Adding an authentication method
 
@@ -66,9 +66,9 @@ Providers are consulted **before** the configured strategy, in priority order. T
 
 Rate limiting runs before providers, so a custom provider cannot be used to make this server hammer an external service.
 
-## Coupling with dot-server
+## Coupling with GameSpice Server
 
-dot-auth and dot-server do not import each other; either works alone. `DotAuthServer` registers itself in `DotRegistry` as `dot_auth_server`, and `DotAuthAdminSource` satisfies dot-server's admin-source contract (`lookup(identity) -> DotResult{flags, immunity, source}` plus `source_name()`) by duck typing. The other direction is duck-typed too: `DotAuthServer` finds `dot_server` in `DotRegistry` for its session reporter and reads only `sessions()`, `uid()`, `is_authenticated()`, `state_changed` and `state_name()` ([tickets](tickets.md#who-builds-the-reporter-and-which-stops-it-reports)). dot-server is linked into this project only for that suite. Keep it that way: a hard dependency in either direction makes both harder to adopt.
+GameSpice Auth and GameSpice Server do not import each other; either works alone. `DotAuthServer` registers itself in `DotRegistry` as `dot_auth_server`, and `DotAuthAdminSource` satisfies GameSpice Server's admin-source contract (`lookup(identity) -> DotResult{flags, immunity, source}` plus `source_name()`) by duck typing. The other direction is duck-typed too: `DotAuthServer` finds `dot_server` in `DotRegistry` for its session reporter and reads only `sessions()`, `uid()`, `is_authenticated()`, `state_changed` and `state_name()` ([tickets](tickets.md#who-builds-the-reporter-and-which-stops-it-reports)). GameSpice Server is linked into this project only for that suite. Keep it that way: a hard dependency in either direction makes both harder to adopt.
 
 ## Deliberately not here
 

@@ -4,9 +4,9 @@ extends "res://addons/dot_auth/server/dot_auth_server_local.gd"
 
 ## Decides who a connecting client is: the game server's side of dot-auth.
 ##
-## dot-server calls [method authenticate] with the client's credential and gets a [DotAuthIdentity] or a refusal; [member DotAuthConfig.strategy] picks the method. Registers as [code]dot_auth_server[/code] in [DotRegistry], and builds the [DotAuthSessionReporter] when [member DotAuthConfig.session_report_url] is set. Usage: docs/rationale.md.
+## GameSpice Server calls [method authenticate] with the client's credential and gets a [DotAuthIdentity] or a refusal; [member DotAuthConfig.strategy] picks the method. Registers as [code]dot_auth_server[/code] in [DotRegistry], and builds the [DotAuthSessionReporter] when [member DotAuthConfig.session_report_url] is set. Usage: docs/rationale.md.
 
-## Registry name dot-server looks for.
+## Registry name GameSpice Server looks for.
 const SERVICE := &"dot_auth_server"
 
 ## What a join token starts with (website-city's `JOIN_TOKEN_PREFIX`).
@@ -28,7 +28,7 @@ signal rejected(reason: String, detail: String)
 
 ## The reporter this server built, or null (no [code]session_report_url[/code], or [member create_session_reporter] off).
 ##
-## Built here because its lifetime and config are this node's; dot-game's per-GAME module would unload it mid-game, and dot-server never names dot-auth. It reaches dot-server by duck type through [DotRegistry].
+## Built here because its lifetime and config are this node's; GameSpice Game's per-GAME module would unload it mid-game, and GameSpice Server never names GameSpice Auth. It reaches GameSpice Server by duck type through [DotRegistry].
 var session_reporter: DotAuthSessionReporter = null
 
 ## The server's own backbone client, holding its integration credential.
@@ -250,7 +250,7 @@ func _build_session_reporter() -> void:
 	session_reporter.config = config
 	add_child(session_reporter)
 
-	# The dot-server may boot before or after this node starts.
+	# The GameSpice Server may boot before or after this node starts.
 	var server := DotRegistry.get_service(&"dot_server")
 	if server != null:
 		session_reporter.follow_server(server)
@@ -615,7 +615,7 @@ func _authenticate_introspect(credential: Dictionary) -> DotResult:
 
 ## INTROSPECT through the server's integration credential, see [member backbone].
 ##
-## The identity has no account id: [member DotAuthIdentity.uid] is `tmc:<key>` and the key is the `scoped_key` claim dot-user files the profile under.
+## The identity has no account id: [member DotAuthIdentity.uid] is `tmc:<key>` and the key is the `scoped_key` claim GameSpice User files the profile under.
 func _authenticate_introspect_scoped(token: String, credential: Dictionary) -> DotResult:
 	var res := await backbone.post_integration(
 		"player/introspect", {"access_token": token}

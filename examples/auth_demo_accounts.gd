@@ -352,7 +352,7 @@ func _test_token_store() -> void:
 	_done()
 
 
-## A custom authentication provider, defined entirely outside dot-auth.
+## A custom authentication provider, defined entirely outside GameSpice Auth.
 class DemoProvider extends DotAuthProvider:
 	var should_fail := false
 

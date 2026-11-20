@@ -303,8 +303,8 @@ func _profiles_client_checks(keeper_path: String, issued: Dictionary) -> void:
 	_check("forgetting one works", not keeper.has_profile("eu-west-1"), null)
 
 
-## The shape check dot-user-avatar applies to a key, restated for the assertion.
-## dot-auth cannot call `DotAvatarKey.is_usable`; that two addons which never
+## The shape check GameSpice User Avatar applies to a key, restated for the assertion.
+## GameSpice Auth cannot call `DotAvatarKey.is_usable`; that two addons which never
 ## import each other agree on a key's shape is what is checked.
 class DotAvatarKeyShape:
 	static func is_usable(key: String) -> bool:
@@ -328,8 +328,8 @@ class DotAvatarKeyShape:
 
 
 
-## RSA keypair via dot-core's Crypto wrapper.
-## Named oddly to avoid colliding with a dot-cloud class; only a local helper.
+## RSA keypair via GameSpice Core's Crypto wrapper.
+## Named oddly to avoid colliding with a GameSpice Cloud class; only a local helper.
 func DotCloudKeys_generate() -> Dictionary:
 	var crypto := Crypto.new()
 	var key := crypto.generate_rsa(2048)

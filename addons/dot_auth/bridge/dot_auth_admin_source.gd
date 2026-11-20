@@ -2,9 +2,9 @@
 class_name DotAuthAdminSource
 extends Resource
 
-## Turns backbone identity into dot-server admin permissions.
+## Turns backbone identity into GameSpice Server admin permissions.
 ##
-## Duck-typed (dot-server calls [method lookup]) so neither addon imports the other. [member role_flags] is empty by default on purpose: a site role must not grant control of every server running this addon.
+## Duck-typed (GameSpice Server calls [method lookup]) so neither addon imports the other. [member role_flags] is empty by default on purpose: a site role must not grant control of every server running this addon.
 
 const CHANNEL := "auth.admin"
 
@@ -32,9 +32,9 @@ const CHANNEL := "auth.admin"
 @export var base_immunity: int = 0
 
 
-## Resolves an identity to admin permissions, the method dot-server calls.
+## Resolves an identity to admin permissions, the method GameSpice Server calls.
 ##
-## Returns [code]{flags, immunity, source}[/code], or a failure when this source has nothing to say, which dot-server reads as "no permissions from here", not an error.
+## Returns [code]{flags, immunity, source}[/code], or a failure when this source has nothing to say, which GameSpice Server reads as "no permissions from here", not an error.
 func lookup(identity: DotAuthIdentity) -> DotResult:
 	if identity == null or not identity.is_valid():
 		return DotResult.fail(
@@ -113,7 +113,7 @@ func lookup(identity: DotAuthIdentity) -> DotResult:
 	})
 
 
-## Name dot-server shows for this source in `admin_sources` output.
+## Name GameSpice Server shows for this source in `admin_sources` output.
 func source_name() -> String:
 	return "dot-auth"
 

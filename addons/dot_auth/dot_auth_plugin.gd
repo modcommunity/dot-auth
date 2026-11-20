@@ -1,7 +1,7 @@
 @tool
 extends EditorPlugin
 
-## Editor entry point for dot-auth. Registers inspector types only.
+## Editor entry point for GameSpice Auth. Registers inspector types only.
 
 const _ICON := "res://addons/dot_auth/icon_placeholder.svg"
 

@@ -1,6 +1,6 @@
 extends Node
 
-## The yml layout of dot-auth's settings: the new path, the flat shim and the operator's layer.
+## The yml layout of GameSpice Auth's settings: the new path, the flat shim and the operator's layer.
 ## Run: timeout 120 godot --headless --path . res://examples/cfg_selftest.tscn
 
 const FOLDER := "dot_auth"

@@ -2,7 +2,7 @@ extends Node
 
 ## A dedicated server that stops frees its players' seats on its own report, not the lease.
 ##
-## Real [DotServer]s (linked from dot-server) with a [DotAuthServer] child and a real [DotAuthIssuer] on a 300-second lease, so a seat freed seconds after confirming can only have been freed by a report. The issuer's socket is a fake on a thread: the goodbye is synchronous and would block the main thread the real listener polls on. Armed by: [member DotAuthServer.create_session_reporter] defaulting false, or removing [code]follow_server[/code]. Run: timeout 120 examples/session_reporter_selftest.tscn.
+## Real [DotServer]s (linked from GameSpice Server) with a [DotAuthServer] child and a real [DotAuthIssuer] on a 300-second lease, so a seat freed seconds after confirming can only have been freed by a report. The issuer's socket is a fake on a thread: the goodbye is synchronous and would block the main thread the real listener polls on. Armed by: [member DotAuthServer.create_session_reporter] defaulting false, or removing [code]follow_server[/code]. Run: timeout 120 examples/session_reporter_selftest.tscn.
 
 const SERVER_A := "eu-west-1"
 const SERVER_B := "us-east-2"
@@ -301,7 +301,7 @@ func _server_config(port: int) -> DotServerConfig:
 	config.hibernate_when_empty = false
 	config.startup_config = ""
 	config.autoexec_config = ""
-	# A thread blocked in a stdin read keeps the process alive after quit(). See dot-game.
+	# A thread blocked in a stdin read keeps the process alive after quit(). See GameSpice Game.
 	config.stdin_console_enabled = false
 	return config
 

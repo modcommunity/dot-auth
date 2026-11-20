@@ -29,7 +29,7 @@ extends Resource
 ## Site-wide role, e.g. [code]USER[/code], [code]MODERATOR[/code]. Advisory: site staff are not automatically server admins.
 @export var role: String = ""
 
-## Arbitrary claims from the backend (entitlements, groups, flags), which dot-server's admin source can map to permissions.
+## Arbitrary claims from the backend (entitlements, groups, flags), which GameSpice Server's admin source can map to permissions.
 @export var claims: Dictionary = {}
 
 ## Unix seconds when this identity was established.
@@ -80,7 +80,7 @@ static func from_backbone_user(d: Dictionary) -> DotResult:
 
 ## Builds an identity from the backbone's scoped introspection answer `{key, name, username}`.
 ##
-## No account id on purpose: the uid is `tmc:<key>`, stable for this player on this server and meaningless elsewhere. The key also goes in the `scoped_key` claim, which dot-user reads; a key derived here could never be resolved by the backbone.
+## No account id on purpose: the uid is `tmc:<key>`, stable for this player on this server and meaningless elsewhere. The key also goes in the `scoped_key` claim, which GameSpice User reads; a key derived here could never be resolved by the backbone.
 static func from_scoped_user(d: Dictionary) -> DotResult:
 	var key := str(d.get("key", ""))
 

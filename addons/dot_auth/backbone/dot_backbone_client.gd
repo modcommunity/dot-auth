@@ -40,7 +40,7 @@ var _timer: Timer = null
 var _limiter: DotRateLimiter = null
 var _started: bool = false
 
-## Supplies the current server state at report time (set by dot-server), sampled when sent, not when it last changed.
+## Supplies the current server state at report time (set by GameSpice Server), sampled when sent, not when it last changed.
 var stats_provider: Callable = Callable()
 
 ## Supplies the current roster. Same contract as [member stats_provider].

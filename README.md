@@ -1,6 +1,6 @@
 [![Auth - GameSpice addon](docs/banner.png)](https://moddingcommunity.com/a/27-gs-auth)
 
-Sign-in for Godot 4.7+ games and dedicated servers. A player signs in against a web back end, and a game server learns who they are without ever being handed a credential for their account. Part of the [dot-*](https://github.com/gamespice-platform) family, alongside [dot-core](https://github.com/gamespice-platform/core), [dot-server](https://github.com/gamespice-platform/server) and [dot-cloud](https://github.com/gamespice-platform/cloud).
+Sign-in for Godot 4.7+ games and dedicated servers. A player signs in against a web back end, and a game server learns who they are without ever being handed a credential for their account. Part of the [GameSpice](https://github.com/gamespice-platform) family, alongside [GameSpice Core](https://github.com/gamespice-platform/core), [GameSpice Server](https://github.com/gamespice-platform/server) and [GameSpice Cloud](https://github.com/gamespice-platform/cloud).
 
 ## Install
 
@@ -107,7 +107,7 @@ Defaults live in `cfg/addon/dot_auth/auth.yml`. A game overrides them in `cfg/ga
 | Class | What it does |
 | --- | --- |
 | `DotBackboneClient` | Reports a dedicated server's player count, map and roster to its site listing, with replay protection. |
-| `DotAuthAdminSource` | Maps site groups, roles and claims to dot-server permission flags and immunity levels. Guests never get permissions, and site roles grant nothing unless you map them. |
+| `DotAuthAdminSource` | Maps site groups, roles and claims to GameSpice Server permission flags and immunity levels. Guests never get permissions, and site roles grant nothing unless you map them. |
 
 ## Try it
 
